@@ -55,7 +55,11 @@ def export(video, plan, destination, job, progress=lambda *_: None,
             args += ["-map", "0:v:0", "-vf", vf, "-fps_mode", "vfr",
                     "-c:v", encoder, "-threads", "2"]
             if encoder == "libx264":
-                args += ["-crf", str(crf), "-preset", "veryfast" if preview else "fast"]
+                # Segment encoding must not wait for future frames while the
+                # audio mixer is waiting for the first video packet. Removing
+                # lookahead also bounds memory for short cuts on modest PCs.
+                args += ["-crf", str(crf), "-preset", "veryfast" if preview else "fast",
+                         "-tune", "zerolatency"]
             elif encoder == "h264_nvenc":
                 args += ["-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
             elif encoder == "h264_qsv":
@@ -63,9 +67,10 @@ def export(video, plan, destination, job, progress=lambda *_: None,
             else:
                 args += ["-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf)]
             if audio:
+                audio_speed = f",{tempo(speed)}" if speed != 1 else ""
                 graph = ("[0:a:0]aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo[a];"
                          "[1:a:0][a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
-                         f"asetpts=PTS-STARTPTS,{tempo(speed)},apad[outa]")
+                         f"asetpts=PTS-STARTPTS{audio_speed},apad[outa]")
                 args += ["-filter_complex", graph, "-map", "[outa]",
                          "-ac", "2", "-c:a", "pcm_s16le"]
             else:

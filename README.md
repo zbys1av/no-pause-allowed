@@ -4,9 +4,26 @@
 цільова платформа; ядро та Qt-інтерфейс також запускаються на Linux.
 Відео не надсилаються в мережу, облікові записи й API не потрібні.
 
+## Готова portable-версія для Windows
+
+**[Завантажити Windows portable ZIP](https://github.com/zbys1av/no-pause-allowed/archive/refs/heads/portable-windows.zip)**
+
+1. Завантажте архів за посиланням вище.
+2. Розпакуйте **всю** папку з архіву.
+3. Запустіть **SmartVideoCutter.exe**.
+
+Встановлювати Python, FFmpeg, кодеки чи Qt не потрібно: усе є всередині.
+Програма працює без адміністратора та без Інтернету. Папки `_internal` і
+`tools` мають залишатися поряд із EXE. Для видалення достатньо видалити
+розпаковану папку після закриття програми.
+
+Це окрема готова збірка у гілці `portable-windows`. ZIP вихідного коду з
+гілки `main` призначений для розробки. Інструкції нижче потрібні лише
+розробникам, а не користувачам portable-версії.
+
 ## Стек і структура
 
-Використано **Python 3.12–3.14 + PySide6/Qt + NumPy + FFmpeg**, замість
+Використано **Python 3.12–3.13 + PySide6/Qt 6.8 LTS + NumPy + FFmpeg**, замість
 рекомендованого Tauri. Для цього застосунку Qt дає нативний відеоплеєр,
 файлові діалоги й виділення області без вебсервера; NumPy виконує порівняння
 кадрів у нативному коді. Це спрощує спільне використання й тестування локального
@@ -25,7 +42,7 @@ scripts/         Windows portable/installer
 uv.lock          зафіксовані залежності для платформ
 ```
 
-## Запуск на Windows
+## Запуск із вихідного коду на Windows (для розробки)
 
 Потрібні Python 3.12 x64 та FFmpeg **6 або новіший** з `libx264`, AAC,
 `showinfo`, `atempo`. Встановіть FFmpeg із перевіреного джерела,
@@ -148,25 +165,35 @@ Qt-тест перевіряє ручне редагування, reset та б�
 поворот/ROI, нетипові кодеки/proxy, експорт довгого VFR, Unicode-шляхи,
 місце на диску, cancel/close і доступні апаратні енкодери.
 
-## Windows portable та інсталятор
+## Відтворення portable-збірки (для розробників)
 
-PyInstaller не створює Windows EXE на Linux. Виконуйте на **Windows x64**:
-
-1. Встановіть середовище командами вище.
-2. Скопіюйте перевірені `ffmpeg.exe` і `ffprobe.exe` у `tools/`.
-   У `tools/licenses/` покладіть ліцензії конкретної збірки FFmpeg,
-   build information та необхідну інформацію про відповідний вихідний код.
-   Врахуйте [THIRD_PARTY.md](THIRD_PARTY.md).
-3. Запустіть:
+На Windows x64 потрібні Python 3.12 та uv. Один сценарій завантажує
+залежності, перевіряє SHA-256 FFmpeg за зафіксованим маніфестом Microsoft
+WinGet, запускає тести, збирає EXE, додає Python/Qt/FFmpeg і ліцензії,
+створює ZIP, розпаковує його в іншу папку та перевіряє готовий EXE.
+Користувач portable-версії нічого з цього не виконує.
 
 ```powershell
+python -m pip install uv==0.12.23
 powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
-# Необов'язково: встановіть Inno Setup 6, додайте ISCC.exe до PATH:
+# Необов'язковий інсталятор, якщо встановлено Inno Setup 6:
 powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -Installer
 ```
 
-Результат: `dist/SmartVideoCutter/SmartVideoCutter.exe`, portable ZIP і,
-за другим варіантом, `dist/SmartVideoCutter-Setup-x64.exe`. Копіювати потрібно
-всю portable-папку разом із Qt-бібліотеками та tools. Інсталятор працює без
-адміністратора. Перевірте пакет на чистій Windows без Python та FFmpeg у PATH.
-Підписання коду та публічне розповсюдження — окремі кроки.
+Результати в `dist/`:
+
+- `SmartVideoCutter-Windows-x64-portable.zip` — готовий архів;
+- `SmartVideoCutter-Windows-x64-portable.zip.sha256` — контрольна сума;
+- `portable-check.json` — результат перевірки готового EXE.
+
+Self-test запускається всередині зібраного EXE з PATH, що не містить
+системного Python чи FFmpeg: генерує відео, аналізує рух, експортує зі
+звуком і декодує кадр у Qt. Ліцензії та інформація про походження FFmpeg
+копіюються автоматично; вручну підкладати виконувані файли не потрібно.
+Завантаження залежностей відбувається тільки при збірці, не в portable-додатку.
+
+Workflow `.github/workflows/portable.yml` повторює це на Windows і публікує
+ZIP у GitHub Releases після успішних тестів. Для його запуску GitHub Actions
+має бути доступним для акаунта. Наявна portable-гілка завантажується без Actions.
+
+Підписання коду сертифікатом Windows не налаштовано; пакет не є підписаним.

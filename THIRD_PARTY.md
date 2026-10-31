@@ -16,8 +16,15 @@ No third-party executables are downloaded by this application.
   See https://ffmpeg.org/legal.html. Qt also bundles its own multimedia libraries;
   retain their notices in addition to those for the external FFmpeg tools.
 
-The Windows packaging script copies `tools/licenses` and installed dependency
-license files. Before public distribution, supply the exact FFmpeg distributor's
-required notices/source information there and verify the complete distribution's
-license obligations. This repository does not ship FFmpeg binaries or claim that
-an arbitrary system FFmpeg build is redistributable.
+The build script downloads Gyan's FFmpeg 8.0.1 Essentials x64 distribution from
+its official GitHub release. `scripts/ffmpeg.lock.json` pins its SHA-256 from
+Microsoft WinGet. The unmodified FFmpeg/FFprobe executables, upstream GPLv3
+license, original README with build configuration/source link, and provenance
+manifest are included under `tools/`. The matching FFmpeg source is linked in
+that upstream README: https://github.com/FFmpeg/FFmpeg/commit/894da5ca7d.
+The original distributor archive is linked in `tools/licenses/provenance.json`.
+Installed Qt/Python/NumPy notices are collected in `licenses/` automatically.
+
+The portable program never downloads dependencies at startup. The source branch
+contains the build recipe; the `portable-windows` branch contains the prepared
+Windows distribution. No administrator installation or system codec pack is used.

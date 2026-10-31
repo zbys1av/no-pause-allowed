@@ -1,0 +1,84 @@
+name: Windows portable
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-portable
+  cancel-in-progress: false
+
+jobs:
+  portable:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - run: python -m pip install uv==0.12.23
+      - name: Build, test and verify the extracted portable archive
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartVideoCutter-Windows-x64-portable
+          path: |
+            dist/SmartVideoCutter-Windows-x64-portable.zip
+            dist/SmartVideoCutter-Windows-x64-portable.zip.sha256
+            dist/portable-check.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: portable-failure-diagnostics
+          path: |
+            build/portable smoke test/portable-check.json
+            build/SmartVideoCutter/warn-SmartVideoCutter.txt
+          if-no-files-found: ignore
+
+  release:
+    needs: portable
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: SmartVideoCutter-Windows-x64-portable
+          path: portable
+      - name: Update the ready-to-run download branch
+        run: |
+          unzip -q portable/SmartVideoCutter-Windows-x64-portable.zip -d unpacked
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          export GIT_INDEX_FILE="$RUNNER_TEMP/portable.index"
+          git read-tree --empty
+          git --work-tree="$PWD/unpacked/SmartVideoCutter" add --all
+          tree=$(git write-tree)
+          if git fetch origin refs/heads/portable-windows; then
+            commit=$(git commit-tree "$tree" -p FETCH_HEAD -m "Windows portable from $GITHUB_SHA")
+          else
+            commit=$(git commit-tree "$tree" -m "Windows portable from $GITHUB_SHA")
+          fi
+          git push origin "$commit:refs/heads/portable-windows"
+      - name: Publish downloadable portable ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          tag="portable-${COMMIT:0:12}"
+          printf '%s\n' 'Windows 10/11 x64. Extract the entire ZIP and launch SmartVideoCutter.exe. Python, Qt and FFmpeg are included; no installation or Internet connection is required. Built and smoke-tested from the extracted archive.' > notes.txt
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" portable/* --clobber
+          else
+            gh release create "$tag" portable/* --target "$COMMIT" --title 'Smart Video Cutter · Windows portable' --notes-file notes.txt --latest
+          fi

@@ -1,12 +1,35 @@
 """Owned child processes, bounded diagnostics and interruptible blocking reads."""
-from collections import deque
 from contextlib import contextmanager
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+
+
+_spawn_lock = threading.Lock()
+
+
+def spawn(args, **kwargs):
+    # PyInstaller changes Windows DLL search globally for its Qt libraries. An
+    # FFmpeg child must inherit the normal OS search, not Qt's private DLLs.
+    # Restore immediately after CreateProcess so the GUI keeps its own search.
+    frozen_windows = os.name == "nt" and getattr(sys, "frozen", False)
+    with _spawn_lock:
+        if frozen_windows:
+            import ctypes
+            set_directory = ctypes.windll.kernel32.SetDllDirectoryW
+            set_directory.argtypes = [ctypes.c_wchar_p]
+            set_directory.restype = ctypes.c_int
+            if not set_directory(None):
+                raise OSError("Could not initialize the media process DLL search")
+        try:
+            return subprocess.Popen(args, **kwargs)
+        finally:
+            if frozen_windows:
+                set_directory(str(sys._MEIPASS))
 
 
 class Cancelled(Exception):
@@ -41,7 +64,7 @@ def tool(name):
 def child(args, job, **kwargs):
     job.check()
     try:
-        process = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+        process = spawn(args, stdin=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0, **kwargs)
     except OSError as exc:
         raise RuntimeError(f"Cannot start {Path(args[0]).name}: {exc}") from exc
@@ -80,23 +103,36 @@ def child(args, job, **kwargs):
 
 def run(args, job, duration=0, progress=lambda *_: None, stage="Processing"):
     """FFmpeg progress comes from output media timestamps, never wall-clock guesses."""
-    tail = deque(maxlen=40)
-    with child(args, job, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
-        def errors():
-            for line in process.stderr:
-                tail.append(line.decode(errors="replace").strip())
-        reader = threading.Thread(target=errors, daemon=True)
-        reader.start()
-        for raw in process.stdout:
-            line = raw.decode(errors="replace").strip()
-            if line.startswith("out_time_us=") and duration:
-                try:
-                    progress(min(.999, max(0., int(line.split("=")[1])/1e6/duration)), stage)
-                except ValueError:
-                    pass
-        code = process.wait()
-        reader.join()
-        job.check()
+    # Drain progress via independent regular-file handles. This avoids Windows
+    # anonymous-pipe backpressure in GUI executables while keeping live, real
+    # timestamps. Only new bytes are read; diagnostics are bounded in memory.
+    with tempfile.TemporaryDirectory(prefix="smartcut-process-") as directory:
+        output_path, error_path = Path(directory)/"progress.log", Path(directory)/"errors.log"
+        with output_path.open("wb") as output, error_path.open("wb") as errors:
+            with child(args, job, stdout=output, stderr=errors) as process:
+                with output_path.open("rb") as updates:
+                    pending = b""
+                    while True:
+                        pending += updates.read()
+                        lines = pending.split(b"\n")
+                        pending = lines.pop()
+                        for raw in lines:
+                            line = raw.decode(errors="replace").strip()
+                            if line.startswith("out_time_us=") and duration:
+                                try:
+                                    progress(min(.999, max(0., int(line.split("=")[1])/1e6/duration)), stage)
+                                except ValueError:
+                                    pass
+                        code = process.poll()
+                        if code is not None:
+                            break
+                        job.check()
+                        job.cancelled.wait(.1)
+                job.check()
         if code:
+            with error_path.open("rb") as errors:
+                errors.seek(0, os.SEEK_END)
+                errors.seek(max(0, errors.tell()-16000))
+                tail = errors.read().decode(errors="replace").splitlines()[-40:]
             raise RuntimeError(f"{stage} failed. " + "\n".join(tail))
     progress(1., stage)

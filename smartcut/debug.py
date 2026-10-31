@@ -29,6 +29,8 @@ class Journal:
 
 REASONS = {
     'merged_transient': 'Short interior cursor/return burst confirmed by pixels; merged by debounce.',
+    'repeated_local_cycle': 'At least three matching repetitions of small local before/after pixel states at a regular cadence; treated as an interface animation, not accumulating ink.',
+    'background_changed': 'Scene changed outside the repeating patch; earlier burst classification revoked to protect drawing.',
     'lasting_change': 'Accumulated change or burst not confirmed as a small cursor/return change; protected, not semantic stroke recognition.',
     'movement_preserved': 'Movement retained: duration, boundary or visual evidence does not permit debouncing.',
     'below_motion_threshold': 'No significant change after spatial noise filtering.',
@@ -72,7 +74,10 @@ def snapshot(window):
             motion='Coherent adjacent changed pixels OR strong pixels; at sensitivity >=90 one strong pixel is enough.',
             chroma='Chroma uses 3x pixel threshold; tiny global RGB offsets <=2 are compensated.',
             debouncing='Only interior runs <= debounce with all samples transient and none persistent are suppressed.',
-            transient='No net change, or small matching opposite translated pixel shapes. This is a heuristic, not semantic recognition.',
+            transient='No significant net change, small translated opposite pixel shapes, or confirmed repeated local pixel states. Heuristic, not semantic recognition.',
+            local_cycles=dict(max_pixels=64,max_extent=32,max_burst_s=.5,minimum_repetitions=3,
+                max_phase_events=3,min_event_period_s=.25,max_event_period_s=5,pixel_tolerance=2,
+                max_locations=8,max_events_per_location=9),
             padding='Activity and short retained pauses expand by padding, then merge; complement becomes idle actions.'),
         limitations=['No media pixels included: visual classification cannot be independently verified from this report.',
                      'Partial cancelled/failed samples are not a completed analysis and must not be used as its plan.'])
@@ -96,7 +101,8 @@ def snapshot(window):
             else:reason='merged_transient'
             bursts.append(dict(start=a,end=b,duration=b-a,sample_begin=begin,sample_end_exclusive=i,
                 transient_samples=sum(getattr(s,'transient',False) for s in evidence),
-                protected_samples=sum(getattr(s,'persistent',False) for s in evidence),reason=reason))
+                protected_samples=sum(getattr(s,'persistent',False) for s in evidence),
+                evidence=sorted({s.evidence for s in evidence if getattr(s,'evidence','')}),reason=reason))
         data['burst_decisions']=bursts
         decisions = []
         available = list(report.available)
@@ -148,7 +154,7 @@ def write_report(captured, destination, job, progress=lambda *_:None):
             for name,raw,stable in [('samples.csv',samples,filtered),('partial_samples.csv',partial,None)]:
                 with archive.open(name,'w') as stream:
                     with io.TextIOWrapper(stream,encoding='utf-8',newline='') as text:
-                        writer=csv.writer(text);writer.writerow(['time_s','score','raw_active','transient','persistent','stabilized_active','reason'])
+                        writer=csv.writer(text);writer.writerow(['time_s','score','raw_active','transient','persistent','stabilized_active','reason','evidence','bounds'])
                         for i,s in enumerate(raw):
                             if i%512==0:
                                 job.check();progress(i/max(1,len(raw)),Text('state.report'))
@@ -157,7 +163,7 @@ def write_report(captured, destination, job, progress=lambda *_:None):
                             persistent=getattr(s,'persistent',s[4] if isinstance(s,list) and len(s)>4 else False)
                             kept=bool(stable[i][2]) if stable is not None else ''
                             reason='merged_transient' if active and kept is False else 'lasting_change' if persistent else 'movement_preserved' if active else 'below_motion_threshold'
-                            writer.writerow([t,score,int(active),int(transient),int(persistent),kept,reason])
+                            writer.writerow([t,score,int(active),int(transient),int(persistent),kept,reason,getattr(s,'evidence',''),json.dumps(getattr(s,'bounds',None))])
             archive.writestr('README.txt','Smart Video Cutter diagnostic report / Діагностичний звіт\n'
                 'Надішліть увесь ZIP для аналізу. Send this whole ZIP for investigation.\n'
                 'report.json: settings, intervals, decision reasons, plans, events and errors.\n'

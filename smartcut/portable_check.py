@@ -51,6 +51,19 @@ def check(report_path):
                 raise RuntimeError(result.stderr.decode(errors="replace"))
             video = probe(source)
             settings = Settings()
+            # Exercise the two-pixel/2-second tail regression in frozen NumPy.
+            import numpy as np
+            from .motion import MotionTracker
+            from .model import analyze_plan
+            tracker=MotionTracker(95)
+            for i in range(144):
+                frame=np.full((100,160,3),200,np.uint8)
+                if (i//16)%2:frame[30,40:42]=30
+                tracker.add(i/8,frame)
+            if not any(s.evidence=='repeated_local_cycle' for s in tracker.samples):
+                raise RuntimeError('Packaged local-cycle detector failed')
+            if any(s.action=='keep' for s in analyze_plan(tracker.samples,18,settings).plan):
+                raise RuntimeError('Packaged detector kept the idle blinking tail')
             samples = analyze(video, settings, Job())
             plan = make_plan(samples, video.duration, settings)
             target = directory / "edited output.mp4"
@@ -105,7 +118,7 @@ def check(report_path):
                 raise RuntimeError("The packaged Qt player did not decode a video frame: " + player_error)
             report.update(ok=True, analysis_samples=len(samples), output_duration=output.duration,
                           audio=True, decoded_video_frame=True, version=__version__,
-                          localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True)
+                          localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True, local_cycles=True)
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

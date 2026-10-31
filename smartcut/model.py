@@ -46,6 +46,8 @@ class MotionSample:
     active: bool
     transient: bool = False
     persistent: bool = False
+    evidence: str = ''
+    bounds: tuple | None = None
 
     def __iter__(self):
         return iter((self.time, self.score, self.active))

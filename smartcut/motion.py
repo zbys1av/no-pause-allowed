@@ -12,6 +12,7 @@ from .model import MotionSample
 from .errors import AppError
 from .i18n import Text
 from dataclasses import replace
+from .repetition import LocalCycles
 
 
 def change_masks(previous, current, sensitivity):
@@ -37,21 +38,27 @@ def change_masks(previous, current, sensitivity):
     return difference, changed, strong_mask
 
 
-def motion_score(previous, current, sensitivity):
-    _, changed, strong_mask = change_masks(previous, current, sensitivity)
+def significant_pixels(changed, strong_mask, sensitivity):
     support = np.zeros(changed.shape, dtype=np.uint8)
     support[1:] += changed[:-1]
     support[:-1] += changed[1:]
     support[:, 1:] += changed[:, :-1]
     support[:, :-1] += changed[:, 1:]
-    coherent = np.count_nonzero(changed & (support >= 1))
+    supported = changed & (support >= 1)
+    coherent = np.count_nonzero(supported)
     strong = np.count_nonzero(strong_mask)
     # A cursor must not disappear merely because the rest of a 4K canvas is still.
     # At high sensitivity, preserve even one strong pixel or two adjacent pixels.
     minimum = max(2, math.ceil(changed.size*.002*(1-sensitivity/100)**3),
                   round(2+(100-sensitivity)*.08))
     moving = coherent >= minimum or strong >= (1 if sensitivity >= 90 else minimum)
-    return float(max(coherent, strong))/changed.size, bool(moving)
+    return float(max(coherent, strong))/changed.size, bool(moving), supported | strong_mask
+
+
+def motion_score(previous, current, sensitivity):
+    _, changed, strong_mask = change_masks(previous, current, sensitivity)
+    score,moving,_=significant_pixels(changed,strong_mask,sensitivity)
+    return score,moving
 
 
 def cursor_or_return(before, after, sensitivity):
@@ -60,7 +67,9 @@ def cursor_or_return(before, after, sensitivity):
     A short lasting mark is protected. A small, exactly translated pair of
     opposite shapes is likely a cursor. Unmatched pixels protect the entire burst.
     """
-    delta, changed, _ = change_masks(before, after, sensitivity)
+    delta, changed, strong = change_masks(before, after, sensitivity)
+    _, moving, changed = significant_pixels(changed,strong,sensitivity)
+    if not moving:return True
     count = np.count_nonzero(changed)
     if not count:
         return True
@@ -96,13 +105,29 @@ class MotionTracker:
         self.burst_start = None
         self.burst_reference = None
         self.burst_peak = 0.
+        self.cycles = LocalCycles(self.same_background)
+        self.burst_bounds = None
+        self.burst_cycle_candidate = False
+
+    def same_background(self, before, after, region):
+        _,changed,strong=change_masks(before,after,self.sensitivity)
+        left,top,right,bottom=region
+        changed[top:bottom,left:right]=False;strong[top:bottom,left:right]=False
+        _,moving,_=significant_pixels(changed,strong,self.sensitivity)
+        return not moving
 
     def add(self, timestamp, frame):
         if self.previous is None:
             self.samples.append(MotionSample(timestamp, 0., False))
             self.previous = self.anchor = frame
             return
-        score, moving = motion_score(self.previous, frame, self.sensitivity)
+        _, changed, strong = change_masks(self.previous,frame,self.sensitivity)
+        score, moving, pixels = significant_pixels(changed,strong,self.sensitivity)
+        bounds=None
+        if moving and np.count_nonzero(pixels)<=64:
+            ys,xs=np.nonzero(pixels)
+            if len(xs) and xs.max()-xs.min()<32 and ys.max()-ys.min()<32:
+                bounds=(int(xs.min()),int(ys.min()),int(xs.max()+1),int(ys.max()+1))
         accumulated = False
         if not moving:
             anchor_score, accumulated = motion_score(self.anchor, frame, self.sensitivity)
@@ -112,13 +137,20 @@ class MotionTracker:
                 if self.quiet_start is not None:
                     for i in range(self.quiet_start, len(self.samples)):
                         t, old_score, _ = self.samples[i]
-                        self.samples[i] = MotionSample(t, max(old_score, anchor_score), True, persistent=True)
+                        self.samples[i] = replace(self.samples[i],score=max(old_score,anchor_score),active=True,persistent=True,evidence='accumulated_change')
                 moving, score = True, max(score, anchor_score)
         if moving:
             if self.burst_start is None:
                 self.burst_start = len(self.samples)
                 self.burst_reference = self.previous
                 self.burst_peak = 0.
+                self.burst_bounds = bounds
+                self.burst_cycle_candidate = bounds is not None
+            if bounds is None or accumulated:self.burst_cycle_candidate=False
+            elif self.burst_bounds is not None:
+                a,b,c,d=self.burst_bounds;x,y,u,v=bounds
+                self.burst_bounds=(min(a,x),min(b,y),max(c,u),max(d,v))
+                if self.burst_bounds[2]-self.burst_bounds[0]>32 or self.burst_bounds[3]-self.burst_bounds[1]>32:self.burst_cycle_candidate=False
             self.burst_peak = max(self.burst_peak, score)
             self.anchor, self.quiet_start = frame, None
         elif self.quiet_start is None:
@@ -128,9 +160,21 @@ class MotionTracker:
             small = self.burst_peak <= max(32/frame.shape[0]/frame.shape[1], .005)
             transient = small and not any(s.persistent for s in burst) and cursor_or_return(self.burst_reference, frame, self.sensitivity)
             for i in range(self.burst_start, len(self.samples)):
-                self.samples[i] = replace(self.samples[i], transient=bool(transient), persistent=not transient)
+                self.samples[i] = replace(self.samples[i], transient=bool(transient), persistent=not transient,
+                    evidence='cursor_or_return' if transient else self.samples[i].evidence or 'unconfirmed_change')
+            if self.burst_cycle_candidate:
+                begin=self.burst_start
+                matches=self.cycles.observe(self.burst_bounds,self.burst_reference,frame,
+                    self.samples[begin-1].time if begin else 0.,self.samples[-1].time,begin,len(self.samples))
+                for event in self.cycles.invalidated:
+                    for i in range(event.begin,event.stop):
+                        self.samples[i]=replace(self.samples[i],transient=False,persistent=True,evidence='background_changed')
+                for event in matches:
+                    for i in range(event.begin,event.stop):
+                        self.samples[i]=replace(self.samples[i],transient=True,persistent=False,evidence='repeated_local_cycle')
             self.burst_start = self.burst_reference = None
-        self.samples.append(MotionSample(timestamp, score, moving, persistent=accumulated))
+        self.samples.append(MotionSample(timestamp, score, moving, persistent=accumulated,
+            evidence='accumulated_change' if accumulated else 'adjacent_change' if moving else 'below_threshold',bounds=bounds))
         self.previous = frame
 
 

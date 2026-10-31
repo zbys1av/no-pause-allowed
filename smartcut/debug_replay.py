@@ -19,7 +19,7 @@ def replay(path):
         if not data.get('analysis') or not data.get('plan_settings'):
             raise ValueError('This report contains no completed analysis to replay')
         samples=[MotionSample(float(r['time_s']),float(r['score']),bool(int(r['raw_active'])),
-                    bool(int(r['transient'])),bool(int(r['persistent'])))
+                    bool(int(r['transient'])),bool(int(r['persistent'])),r.get('evidence',''),json.loads(r.get('bounds') or 'null'))
                  for r in csv.DictReader(io.StringIO(archive.read('samples.csv').decode('utf-8')))]
     report=analyze_plan(samples,data['video']['duration'],Settings(**data['plan_settings']),data['plan_mode'],data['speed'])
     plan=[asdict(s) for s in report.plan]

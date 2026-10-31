@@ -41,7 +41,7 @@ CATALOG = {
  'padding': ('Запас біля руху', 'Motion Padding'),
  'padding.help': ('Залишає трохи відео до та після дії. Наприклад, 0,6 с пом’якшує переходи.', 'Keeps a little video before and after an action. For example, 0.6 s softens cuts.'),
  'debounce': ('Фільтрація коротких сплесків', 'Motion Debouncing'),
- 'debounce.help': ('Об’єднує паузи через короткі підтверджені сплески курсора/шуму. Нові штрихи з постійною зміною зберігаються. 0 вимикає фільтр.', 'Joins pauses across brief confirmed cursor/noise bursts. Lasting new strokes are protected. Set 0 to disable.'),
+ 'debounce.help': ('Об’єднує паузи через короткі сплески курсора, шуму й підтверджене повторне миготіння інтерфейсу. Нові сталі штрихи зберігаються. 0 вимикає фільтр.', 'Joins pauses across brief cursor/noise bursts and confirmed repeating interface blinks. Lasting new strokes are protected. Set 0 to disable.'),
  'fps': ('Частота аналізу', 'Analysis FPS'),
  'fps.help': ('Більше кадрів за секунду краще виявляє швидкі дії, але аналіз займає довше.', 'More samples per second catch faster actions but take longer to analyze.'),
  'detail': ('Деталізація аналізу', 'Detection Resolution'),

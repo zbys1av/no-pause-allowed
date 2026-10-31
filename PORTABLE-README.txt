@@ -1,4 +1,4 @@
-Smart Video Cutter 1.3 — Windows 10/11 x64 Portable
+Smart Video Cutter 1.4 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -33,3 +33,7 @@ Third-party notices: THIRD_PARTY.md, licenses/ and tools/licenses/.
 Save debug report / Зберегти звіт: save the ZIP after analysis or an error,
 then send that file for diagnosis. Contains decisions, scores and errors,
 not the video or audio. Technical errors and the filename may identify files.
+
+Small regularly repeating interface blinks are recognized from matching pixel
+states. Growing strokes remain protected. Set Motion Debouncing to 0 to
+retain such animations. Reanalyze old videos to collect the new evidence.

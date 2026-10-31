@@ -10,6 +10,8 @@ No third-party executables are downloaded by this application.
   See https://doc.qt.io/qtforpython-6/licenses.html and the exact installed wheel.
 * NumPy: BSD-3-Clause and the bundled dependency notices in its wheel.
 * PyInstaller: GPL with its bootloader exception; see its distribution notices.
+* Lucide icons: ISC license. The official SVG icons and license are preserved
+  under `smartcut/assets/` and bundled with the portable application.
 * External FFmpeg/FFprobe: the exact build's license applies. A build containing
   libx264 is normally GPL-enabled. Keep the exact binary build information,
   license, and corresponding source/source offer required by that distribution.

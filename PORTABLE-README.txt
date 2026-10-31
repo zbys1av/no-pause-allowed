@@ -1,4 +1,4 @@
-Smart Video Cutter 1.1 — Windows 10/11 x64 Portable
+Smart Video Cutter 1.2 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -9,18 +9,23 @@ No installer, administrator account, registration or Internet connection is need
 Keep _internal and tools next to the EXE. Do not launch from inside the ZIP.
 Do not move only the EXE out of this folder.
 
-Open Video -> Analyze Video -> inspect the timeline -> Export Video.
+Ukrainian is the default language. Settings switches between Ukrainian/English.
+Open Video -> choose a profile -> Analyze Video -> review -> Export Video.
 Drag a video onto the drop zone or the player to open it quickly.
 Analysis shows an approximate remaining time based on its measured speed.
-Source movement/still-time statistics are separate from the editing plan.
+Three separate statistics show raw still time, qualifying continuous pauses
+and actual removal after padding/manual edits. Analysis Details explains cuts
+and unchanged plans. Advanced Settings and Manual Editing start collapsed.
 Defaults preserve fine drawing: 95% sensitivity, 960 px detail, 8 samples/s,
-minimum idle 3 seconds and 0.6 seconds of padding around movement.
-If a source codec cannot play, choose Compatible preview.
+minimum idle 3 seconds, 0.6 seconds padding and 0.3 seconds motion debouncing.
+Brief confirmed cursor/noise bursts can be joined; lasting brush marks remain.
+If a source codec cannot play, the player offers compatible playback.
 The original video is never overwritten.
 
 To remove the program, close it and delete its folder.
 Preview files use the system temporary directory and are removed on normal exit.
 Exported videos stay in the folder you chose.
+Only the language preference is stored next to the EXE, when writable.
 
 Source and documentation: https://github.com/zbys1av/no-pause-allowed
 Third-party notices: THIRD_PARTY.md, licenses/ and tools/licenses/.

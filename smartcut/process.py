@@ -1,0 +1,102 @@
+"""Owned child processes, bounded diagnostics and interruptible blocking reads."""
+from collections import deque
+from contextlib import contextmanager
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import threading
+
+
+class Cancelled(Exception):
+    pass
+
+
+class Job:
+    def __init__(self):
+        self.cancelled = threading.Event()
+
+    def cancel(self):
+        self.cancelled.set()
+
+    def check(self):
+        if self.cancelled.is_set():
+            raise Cancelled("Operation cancelled")
+
+
+def tool(name):
+    variable = "SMARTCUT_" + name.upper()
+    explicit = os.environ.get(variable)
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    filename = name + (".exe" if os.name == "nt" else "")
+    options = [explicit] if explicit else [str(base / "tools" / filename), shutil.which(name)]
+    for option in options:
+        if option and Path(option).is_file():
+            return str(option)
+    raise RuntimeError(f"{name} not found. Install FFmpeg and FFprobe, put them in tools/, or set {variable}.")
+
+
+@contextmanager
+def child(args, job, **kwargs):
+    job.check()
+    try:
+        process = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0, **kwargs)
+    except OSError as exc:
+        raise RuntimeError(f"Cannot start {Path(args[0]).name}: {exc}") from exc
+    stopped = threading.Event()
+
+    def watch():
+        while not stopped.wait(.08):
+            if job.cancelled.is_set():
+                try:
+                    process.terminate()
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                except OSError:
+                    pass
+                return
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        yield process
+        job.check()
+    finally:
+        stopped.set()
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        process.wait()
+        watcher.join(timeout=3)
+        for pipe in (process.stdout, process.stderr):
+            if pipe:
+                pipe.close()
+
+
+def run(args, job, duration=0, progress=lambda *_: None, stage="Processing"):
+    """FFmpeg progress comes from output media timestamps, never wall-clock guesses."""
+    tail = deque(maxlen=40)
+    with child(args, job, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        def errors():
+            for line in process.stderr:
+                tail.append(line.decode(errors="replace").strip())
+        reader = threading.Thread(target=errors, daemon=True)
+        reader.start()
+        for raw in process.stdout:
+            line = raw.decode(errors="replace").strip()
+            if line.startswith("out_time_us=") and duration:
+                try:
+                    progress(min(.999, max(0., int(line.split("=")[1])/1e6/duration)), stage)
+                except ValueError:
+                    pass
+        code = process.wait()
+        reader.join()
+        job.check()
+        if code:
+            raise RuntimeError(f"{stage} failed. " + "\n".join(tail))
+    progress(1., stage)

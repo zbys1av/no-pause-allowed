@@ -20,6 +20,10 @@ class State(str, Enum):
     PREVIEW_COMPLETE='preview_complete'
     PREVIEW_CANCELLED='preview_cancelled'
     PREVIEW_FAILED='preview_failed'
+    REPORT='report'
+    REPORT_COMPLETE='report_complete'
+    REPORT_CANCELLED='report_cancelled'
+    REPORT_FAILED='report_failed'
 
 
 class Workflow:
@@ -39,7 +43,7 @@ class Workflow:
         self.generation+=1
         self.kind=kind
         self.progress=None
-        self.state={'analysis':State.ANALYZING,'export':State.EXPORTING,'preview':State.PREVIEW,'loading':State.LOADING}[kind]
+        self.state={'analysis':State.ANALYZING,'export':State.EXPORTING,'preview':State.PREVIEW,'loading':State.LOADING,'report':State.REPORT}[kind]
         return self.generation
 
     def update(self, generation, progress):

@@ -80,6 +80,14 @@ def check(report_path):
             valid_frames = []
             window.view.item.videoSink().videoFrameChanged.connect(lambda f: valid_frames.append(f.isValid()))
             window.loaded(output)
+            window.analyzed(samples)
+            from .debug import snapshot, write_report
+            import zipfile
+            debug_path=directory/'diagnostic.zip'
+            write_report(snapshot(window),debug_path,Job())
+            with zipfile.ZipFile(debug_path) as archive:
+                if json.loads(archive.read('report.json'))['schema']!='smartcut-debug':
+                    raise RuntimeError('Invalid packaged diagnostic report')
             window.player.setSource(QUrl.fromLocalFile(str(target)))
             window.player.play()
             deadline = time.monotonic()+25
@@ -97,7 +105,7 @@ def check(report_path):
                 raise RuntimeError("The packaged Qt player did not decode a video frame: " + player_error)
             report.update(ok=True, analysis_samples=len(samples), output_duration=output.duration,
                           audio=True, decoded_video_frame=True, version=__version__,
-                          localized_ui=True, svg_icons=True, simple_mode=True)
+                          localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True)
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

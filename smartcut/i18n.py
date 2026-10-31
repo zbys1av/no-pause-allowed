@@ -2,6 +2,12 @@
 from dataclasses import dataclass, field
 
 CATALOG = {
+ 'debug.save': ('Зберегти звіт', 'Save debug report'),
+ 'debug.help': ('Зберігає ZIP з параметрами, рішеннями, часовими оцінками та помилками. Без відео й звуку. Надішліть цей файл для діагностики.', 'Save a ZIP with settings, decisions, sample scores and errors. No video or audio. Share this file for investigation.'),
+ 'state.report': ('Зберігаємо діагностичний звіт', 'Saving diagnostic report'),
+ 'state.report_complete': ('Звіт збережено: {report_path}', 'Report saved: {report_path}'),
+ 'state.report_cancelled': ('Збереження звіту скасовано', 'Report saving cancelled'),
+ 'state.report_failed': ('Не вдалося зберегти звіт', 'Unable to save report'),
  'app': ('Smart Video Cutter', 'Smart Video Cutter'),
  'step.video': ('1  Відео', '1  Video'), 'step.settings': ('2  Налаштування', '2  Settings'),
  'step.analyze': ('3  Аналіз', '3  Analyze'), 'step.review': ('4  Перевірка й експорт', '4  Review & export'),

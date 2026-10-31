@@ -1,5 +1,5 @@
 """Four-step desktop controller. Detection, planning and encoding stay independent."""
-from dataclasses import replace
+from dataclasses import replace,asdict
 from pathlib import Path
 import shutil
 import sys
@@ -24,6 +24,7 @@ from .errors import AppError,user_error
 from .preferences import read_language,save_language
 from .icons import icon
 from .worker import Worker
+from .debug import Journal,snapshot,write_report
 from .widgets import VideoView,Timeline,VideoDropFilter,video_drop_path,Fold,SettingRow,StatCard,MotionGraph,clock
 
 
@@ -49,6 +50,8 @@ class Window(QMainWindow):
         self.capture_settings=None;self.capture_area_mode=0;self.pending_settings=None;self.pending_area_mode=0
         self.preview_path=self.proxy_path=None;self.last_export_path='';self.current_stage=None
         self.workflow=Workflow();self.analysis_estimate=None;self.last_analysis_elapsed=None;self.cancelling=False
+        self.journal=Journal();self.journal.add('application_started',version=__version__)
+        self.last_job_debug={};self.last_analysis_debug={};self.plan_settings=None;self.last_report_path='';self.operation_kind=None
         self._updating=False;self.bindings=[];self.rows={}
         self.cache=Path(tempfile.mkdtemp(prefix='smartcut-preview-'))
         self.player=QMediaPlayer(self);self.audio_output=QAudioOutput(self);self.player.setAudioOutput(self.audio_output)
@@ -85,6 +88,7 @@ class Window(QMainWindow):
         root=QWidget();self.setCentralWidget(root);layout=QVBoxLayout(root);layout.setContentsMargins(22,16,22,16);layout.setSpacing(12)
         header=QHBoxLayout();brand=QLabel('Smart Video Cutter');brand.setObjectName('brand');header.addWidget(brand);header.addStretch()
         self.open_button=self.button('open',self.open_dialog,'folder-open');header.addWidget(self.open_button)
+        self.debug_button=self.button('debug.save',self.save_debug_report,'download');header.addWidget(self.debug_button)
         self.settings_button=self.button('settings',self.settings_dialog,'settings');header.addWidget(self.settings_button);layout.addLayout(header)
         steps=QHBoxLayout();self.steps=[]
         for key in ('step.video','step.settings','step.analyze','step.review'):
@@ -205,6 +209,7 @@ class Window(QMainWindow):
 
     def analysis_changed(self,*_):
         if self._updating:return
+        self.journal.add('detector_settings_changed',settings=asdict(self.settings()))
         if self.samples:
             self.dirty=self.capture_settings is None or self.signature(self.settings(),self.detection.currentIndex())!=self.signature(self.capture_settings,self.capture_area_mode)
             if not self.dirty:self.replan()
@@ -212,6 +217,7 @@ class Window(QMainWindow):
 
     def temporal_changed(self,*_):
         if self._updating:return
+        self.journal.add('pause_settings_changed',settings=asdict(self.settings()),mode=self.mode.currentIndex())
         if self.samples and not self.dirty:self.replan()
         self.invalidate_preview();self.render()
 
@@ -219,11 +225,14 @@ class Window(QMainWindow):
         if not self.samples or self.dirty:return
         if self.manual_changed:self.plan_reset_notice=True
         self.report=analyze_plan(self.samples,self.video.duration,self.settings(),'remove' if self.mode.currentIndex()==0 else 'speed',self.speed_value())
+        self.plan_settings=self.settings();self.journal.add('plan_rebuilt',settings=asdict(self.plan_settings),mode='remove' if self.mode.currentIndex()==0 else 'speed',speed=self.speed_value(),merged_bursts=self.report.merged_bursts)
+        self.plan_mode='remove' if self.mode.currentIndex()==0 else 'speed'
         self.automatic=list(self.report.plan);self.plan=list(self.automatic);self.manual_changed=False
         self.invalidate_preview();self.render_plan()
 
     def speed_changed(self,*_):
         if self._updating:return
+        self.journal.add('speed_changed',speed=self.speed_value())
         self.plan=[replace(s,speed=self.speed_value()) for s in self.plan];self.automatic=[replace(s,speed=self.speed_value()) for s in self.automatic]
         self.invalidate_preview();self.render_plan()
 
@@ -288,6 +297,8 @@ class Window(QMainWindow):
         self.work(lambda job,p:probe(path,job),self.loaded,Text('state.loading'),'loading')
 
     def loaded(self,video):
+        self.journal.add('video_loaded',duration=video.duration,width=video.width,height=video.height)
+        self.plan_settings=None
         self.player.stop();self.player.setSource(QUrl());self.video=video
         self.samples=[];self.plan=[];self.automatic=[];self.report=None;self.capture_settings=None;self.dirty=False;self.manual_changed=False;self.plan_reset_notice=False
         self.selected_box.hide();self.graph.set_samples([],video.duration)
@@ -301,6 +312,9 @@ class Window(QMainWindow):
         if self.worker:return
         if analysis is True:kind='analysis'
         self.player.pause();generation=self.workflow.begin(kind);self.current_stage=stage;self.cancelling=False
+        self.operation_kind=kind;self.progress_bucket=-1;self.journal.add('operation_started',kind=kind,generation=generation)
+        self.operation_settings=asdict(self.settings())
+        self.operation_video=dict(filename=self.video.path.name,duration=self.video.duration,width=self.video.width,height=self.video.height) if self.video else None
         if kind=='analysis':self.analysis_estimate=AnalysisEstimate();self.eta_timer.start()
         worker=Worker(operation,self);self.worker=worker
         worker.result.connect(lambda result:self.operation_result(generation,result,done))
@@ -311,19 +325,26 @@ class Window(QMainWindow):
 
     def operation_result(self,generation,result,done):
         if generation!=self.workflow.generation:return
+        self.journal.add('operation_completed',kind=self.operation_kind,generation=generation)
         self.workflow.finish('complete');self.current_stage=None;self.eta_timer.stop();done(result);self.render()
 
     def operation_failed(self,generation,error):
         if generation!=self.workflow.generation:return
+        import traceback
+        self.journal.add('operation_failed',kind=self.operation_kind,error_type=type(error).__name__,error=str(error),traceback=''.join(traceback.format_exception(error))[-16000:])
         self.workflow.finish('failed');self.current_stage=None;self.eta_timer.stop();self.render();self.show_error(error)
 
     def operation_cancelled(self,generation=None):
         if generation is not None and generation!=self.workflow.generation:return
+        self.journal.add('operation_cancelled',kind=self.operation_kind)
         self.workflow.finish('cancelled');self.current_stage=None;self.eta_timer.stop();self.render()
 
     def on_progress(self,fraction,stage,generation=None):
         generation=self.workflow.generation if generation is None else generation
         if not self.workflow.update(generation,fraction):return
+        bucket=int(fraction*20)
+        if bucket!=getattr(self,'progress_bucket',-1):
+            self.progress_bucket=bucket;self.journal.add('progress',fraction=fraction,stage=stage.key if isinstance(stage,Text) else str(stage))
         if isinstance(stage,Text):self.current_stage=stage
         if self.workflow.kind=='analysis':self.analysis_estimate.update(fraction)
         self.render_operation()
@@ -331,6 +352,10 @@ class Window(QMainWindow):
     def job_finished(self,generation=None):
         if generation is not None and generation!=self.workflow.generation:return
         old=self.worker;self.worker=None
+        if old and self.operation_kind!='report':
+            self.last_job_debug=dict(kind=self.operation_kind,state=self.workflow.state.value,settings=self.operation_settings,input_video=self.operation_video,commands=old.job.debug_commands,
+                                     samples=list(getattr(old.job,'debug_samples',[])) if self.workflow.state in (State.ANALYSIS_FAILED,State.ANALYSIS_CANCELLED) else [])
+            if self.operation_kind=='analysis':self.last_analysis_debug=self.last_job_debug
         if old:old.deleteLater()
         self.eta_timer.stop();self.cancelling=False
         if self.preview_mode.currentIndex()==1 and self.preview_path is None:self.preview_mode.setCurrentIndex(0)
@@ -342,6 +367,7 @@ class Window(QMainWindow):
             self.cancelling=True;self.worker.job.cancel();self.eta_timer.stop();self.render_operation()
 
     def show_error(self,error):
+        self.journal.add('error_shown',error_type=type(error).__name__,error=str(error))
         if self.closing:return
         message,details=user_error(error,self.language)
         box=QMessageBox(self);box.setWindowTitle(self.t('error.title'));box.setText(message);box.setIcon(QMessageBox.Warning)
@@ -404,6 +430,8 @@ class Window(QMainWindow):
     def render(self):
         self.render_results()
         loaded=self.video is not None;busy=self.worker is not None
+        self.debug_button.setEnabled(not busy)
+        self.debug_button.setToolTip(self.t('debug.help'))
         self.sidebar.setVisible(loaded);self.view.setVisible(loaded);self.player_controls.setVisible(loaded);self.seek.setVisible(loaded);self.file_details_button.setVisible(loaded)
         self.drop_zone.setMinimumHeight(42 if loaded else 240)
         if loaded:self.metadata.setText(f'{self.video.path.name}  ·  {clock(self.video.duration)}  ·  {self.video.width} × {self.video.height}')
@@ -434,7 +462,7 @@ class Window(QMainWindow):
         active=self.workflow.busy
         if self.cancelling and active:self.phase_label.setText(self.t('cancel.pending'))
         elif active and self.current_stage:self.phase_label.setText(self.t(self.current_stage.key,**self.current_stage.params))
-        else:self.phase_label.setText(self.t('state.'+self.workflow.state.value,path=self.last_export_path))
+        else:self.phase_label.setText(self.t('state.'+self.workflow.state.value,path=self.last_export_path,report_path=self.last_report_path))
         self.progress.setVisible(active)
         if not active:self.progress.setRange(0,1000);self.progress.setValue(0)
         elif self.workflow.progress is None:self.progress.setRange(0,0)
@@ -463,6 +491,7 @@ class Window(QMainWindow):
     def set_action(self,action):
         index=self.timeline.index
         if self.worker or self.dirty or not 0<=index<len(self.plan):return
+        self.journal.add('manual_action',index=index,start=self.plan[index].start,end=self.plan[index].end,action=action,speed=self.speed_value())
         self.plan[index]=replace(self.plan[index],action=action,speed=self.speed_value());self.manual_changed=True;self.plan_reset_notice=False;self.invalidate_preview();self.render_plan();self.populate_segment(index)
 
     def apply_edit(self):
@@ -471,9 +500,11 @@ class Window(QMainWindow):
             plan=move_boundary(self.plan,index,self.start.value(),self.end.value(),self.video.duration)
             plan[index]=replace(plan[index],action=('keep','remove','speed')[self.action.currentIndex()],speed=self.speed_value())
             self.plan=plan;self.manual_changed=True;self.plan_reset_notice=False;self.invalidate_preview();self.render_plan();self.populate_segment(index)
+            self.journal.add('manual_boundaries',index=index,start=self.start.value(),end=self.end.value(),action=self.plan[index].action)
         except ValueError as error:self.show_error(error)
 
-    def reset_plan(self):self.plan=list(self.automatic);self.manual_changed=False;self.plan_reset_notice=False;self.invalidate_preview();self.render_plan()
+    def reset_plan(self):
+        self.journal.add('manual_plan_reset');self.plan=list(self.automatic);self.manual_changed=False;self.plan_reset_notice=False;self.invalidate_preview();self.render_plan()
 
     def render_play(self):
         active=self.player.playbackState()==QMediaPlayer.PlayingState
@@ -547,6 +578,16 @@ class Window(QMainWindow):
         self.work(lambda job,p:export(self.video,list(self.plan),destination,job,p,crf=quality,mute=mute,encoder=encoder),self.exported,Text('state.exporting'),'export')
 
     def exported(self,path):self.last_export_path=str(path)
+
+    def save_debug_report(self):
+        if self.worker:return
+        path,_=QFileDialog.getSaveFileName(self,self.t('debug.save'),'SmartVideoCutter-debug.zip','ZIP (*.zip)',options=QFileDialog.DontConfirmOverwrite|QFileDialog.DontUseNativeDialog)
+        if path:
+            if not path.lower().endswith('.zip'):path+='.zip'
+            captured=snapshot(self)
+            self.work(lambda job,p:write_report(captured,path,job,p),self.report_saved,Text('state.report'),'report')
+
+    def report_saved(self,path):self.last_report_path=str(path)
 
     def highlight_drop(self,active):
         if self.drop_zone.property('dragActive')!=active:

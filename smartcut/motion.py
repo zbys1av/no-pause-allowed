@@ -148,6 +148,7 @@ def analyze(video, settings, job, progress=lambda *_: None):
     timestamps = queue.Queue()
     errors = deque(maxlen=30)
     tracker = MotionTracker(settings.sensitivity)
+    job.debug_samples = tracker.samples
     frame_bytes = width*height*3
     last_progress = -math.inf
     pattern = re.compile(r"\bn:\s*\d+.*?pts_time:([\d.eE+\-]+)")

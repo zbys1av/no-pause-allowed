@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from .errors import AppError
 
 
@@ -40,6 +41,7 @@ class Cancelled(Exception):
 class Job:
     def __init__(self):
         self.cancelled = threading.Event()
+        self.debug_commands = []
 
     def cancel(self):
         self.cancelled.set()
@@ -64,10 +66,15 @@ def tool(name):
 @contextmanager
 def child(args, job, **kwargs):
     job.check()
+    started=time.monotonic();debug_entry=None
+    if len(job.debug_commands)<2000:
+        debug_entry=dict(tool=Path(str(args[0])).name,arguments=[('<file:'+Path(str(a)).suffix+'>') if Path(str(a)).is_absolute() else str(a) for a in args[1:]])
+        job.debug_commands.append(debug_entry)
     try:
         process = spawn(args, stdin=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0, **kwargs)
     except OSError as exc:
+        if debug_entry is not None:debug_entry['start_error']=str(exc)
         raise AppError("error.start", str(exc), tool=Path(args[0]).name) from exc
     stopped = threading.Event()
 
@@ -96,6 +103,7 @@ def child(args, job, **kwargs):
             except subprocess.TimeoutExpired:
                 process.kill()
         process.wait()
+        if debug_entry is not None:debug_entry.update(returncode=process.returncode,elapsed_s=time.monotonic()-started)
         watcher.join(timeout=3)
         for pipe in (process.stdout, process.stderr):
             if pipe:

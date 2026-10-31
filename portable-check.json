@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "frozen": true,
+  "ffmpeg": "ffmpeg.exe",
+  "ffprobe": "ffprobe.exe",
+  "analysis_samples": 18,
+  "output_duration": 2.999,
+  "audio": true,
+  "decoded_video_frame": true
+}

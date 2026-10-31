@@ -6,7 +6,7 @@ import sys
 import tempfile
 import uuid
 
-from PySide6.QtCore import Qt, QThread, Signal, QUrl, QRectF
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QRectF, QObject, QEvent, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -17,16 +17,50 @@ from PySide6.QtWidgets import (
     QGraphicsRectItem, QTableWidget, QTableWidgetItem, QAbstractItemView,
     QHeaderView, QSplitter, QDialog, QDialogButtonBox, QScrollArea,
 )
-from .model import Settings, make_plan, move_boundary, statistics
+from .model import Settings, make_plan, move_boundary, statistics, detection_statistics
 from .motion import analyze
 from .video import probe
 from .export import export, proxy
 from .process import Job, Cancelled
+from .progress import AnalysisEstimate
+from . import __version__
 
 
 def clock(value):
     value = max(0, value)
     return f"{int(value)//3600:02}:{int(value)//60%60:02}:{value%60:05.2f}"
+
+
+def video_drop_path(mime):
+    if not mime.hasUrls() or len(mime.urls()) != 1 or not mime.urls()[0].isLocalFile():
+        return None
+    path = mime.urls()[0].toLocalFile()
+    return path if Path(path).suffix.lower() in {".mp4", ".mov", ".mkv", ".webm", ".avi"} else None
+
+
+class VideoDropFilter(QObject):
+    """Handle file drops before graphics/table viewports consume drag events."""
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind == QEvent.DragLeave:
+            self.window.highlight_drop(False)
+        if kind not in (QEvent.DragEnter, QEvent.DragMove, QEvent.Drop):
+            return False
+        if not event.mimeData().hasUrls():
+            return False
+        path = video_drop_path(event.mimeData())
+        if self.window.worker or not path:
+            event.ignore()
+            return True
+        event.acceptProposedAction()
+        self.window.highlight_drop(kind != QEvent.Drop)
+        if kind == QEvent.Drop:
+            QTimer.singleShot(0, lambda: self.window.open_video(path))
+        return True
 
 
 class Worker(QThread):
@@ -183,7 +217,7 @@ class ExportDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Video Cutter")
+        self.setWindowTitle(f"Smart Video Cutter · {__version__}")
         self.resize(1260, 900)
         self.setAcceptDrops(True)
         self.video = None
@@ -194,6 +228,8 @@ class Window(QMainWindow):
         self.worker = None
         self.closing = False
         self.dirty = False
+        self.analysis_estimate = None
+        self.analysis_state = "idle"
         self.preview_path = None
         self.proxy_path = None
         self.cache = Path(tempfile.mkdtemp(prefix="smartcut-preview-"))
@@ -225,6 +261,12 @@ class Window(QMainWindow):
         self.metadata = QLabel("Drop a video here · MP4, MOV, MKV, WebM, AVI · Local processing")
         self.metadata.setWordWrap(True)
         layout.addWidget(self.metadata)
+        self.drop_zone = QPushButton("Перетягніть відео сюди або натисніть, щоб відкрити")
+        self.drop_zone.setObjectName("dropZone")
+        self.drop_zone.setMinimumHeight(44)
+        self.drop_zone.setToolTip("MP4, MOV, MKV, WebM, AVI · один файл за раз. Можна також кинути файл на плеєр.")
+        self.drop_zone.clicked.connect(self.open_dialog)
+        layout.addWidget(self.drop_zone)
         splitter = QSplitter()
         layout.addWidget(splitter, 1)
         editor = QWidget()
@@ -251,17 +293,29 @@ class Window(QMainWindow):
         self.seek.setRange(0, 10000)
         self.seek.sliderMoved.connect(lambda v: self.player.setPosition(round(v/10000*self.player.duration())))
         center.addWidget(self.seek)
-        center.addWidget(QLabel("EDITING PLAN     green · keep     red · remove     amber · speed up"))
+        center.addWidget(QLabel("ПЛАН МОНТАЖУ   ·   зелений — залишити   ·   червоний — вирізати   ·   жовтий — прискорити"))
         self.timeline = Timeline()
         self.timeline.selected.connect(self.select_segment)
         center.addWidget(self.timeline)
+        self.detection_group = QGroupBox("Активність в оригінальному відео")
+        self.detection_group.setToolTip("Оцінка за часовими позначками оригіналу, без запасу й ручних правок. Короткі паузи можуть залишатися в плані монтажу.")
+        raw_layout = QVBoxLayout(self.detection_group)
+        raw_row = QHBoxLayout()
+        self.motion_value = QLabel("Рух / зміни\n—")
+        self.still_value = QLabel("Без руху\n—")
+        self.long_idle_value = QLabel("Довгі паузи\n—")
+        for label in (self.motion_value, self.still_value, self.long_idle_value):
+            label.setObjectName("activityValue")
+            raw_row.addWidget(label, 1)
+        raw_layout.addLayout(raw_row)
+        self.ratio = QProgressBar()
+        self.ratio.setRange(0, 1000)
+        self.ratio.setFormat("Статистика з'явиться після аналізу")
+        raw_layout.addWidget(self.ratio)
+        center.addWidget(self.detection_group)
         self.stats = QLabel("Analyze a video to calculate real durations and reduction.")
         self.stats.setWordWrap(True)
         center.addWidget(self.stats)
-        self.ratio = QProgressBar()
-        self.ratio.setFormat("Active / idle")
-        self.ratio.setRange(0, 1000)
-        center.addWidget(self.ratio)
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Start", "End", "Action"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -269,6 +323,8 @@ class Window(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setMaximumHeight(170)
+        self.table.setMinimumHeight(0)
+        self.table.hide()
         self.table.cellClicked.connect(lambda row, _: self.select_segment(row))
         center.addWidget(self.table)
         edit = QHBoxLayout()
@@ -295,6 +351,7 @@ class Window(QMainWindow):
         self.sidebar = QScrollArea()
         self.sidebar.setWidgetResizable(True)
         self.sidebar.setMinimumWidth(270)
+        self.sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         side = QWidget()
         settings_layout = QVBoxLayout(side)
         title = QLabel("Motion detection")
@@ -302,18 +359,28 @@ class Window(QMainWindow):
         settings_layout.addWidget(title)
         self.sensitivity = QSlider(Qt.Horizontal)
         self.sensitivity.setRange(0, 100)
-        self.sensitivity.setValue(80)
-        self.sensitivity_label = QLabel("Motion Sensitivity · 80%")
+        defaults = Settings()
+        self.sensitivity.setValue(int(defaults.sensitivity))
+        self.sensitivity_label = QLabel(f"Чутливість до дрібного руху · {defaults.sensitivity}%")
         settings_layout.addWidget(self.sensitivity_label)
         settings_layout.addWidget(self.sensitivity)
         self.sensitivity.valueChanged.connect(self.analysis_changed)
         form = QFormLayout()
-        self.minimum = self.spin(.5, 10, 1.5, .1)
-        self.padding = self.spin(0, 2, .4, .1)
-        self.frequency = self.spin(1, 12, 6, 1)
-        form.addRow("Minimum Idle Duration", self.minimum)
-        form.addRow("Motion Padding", self.padding)
-        form.addRow("Analysis frames / s", self.frequency)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self.minimum = self.spin(.5, 10, defaults.min_idle, .1)
+        self.padding = self.spin(0, 2, defaults.padding, .1)
+        self.frequency = self.spin(1, 12, defaults.sample_fps, 1)
+        form.addRow("Мінімальна пауза, с", self.minimum)
+        form.addRow("Запас біля руху, с", self.padding)
+        form.addRow("Кадрів аналізу / с", self.frequency)
+        self.detail = QComboBox()
+        self.detail.addItems(["320 · швидко", "640 · стандарт", "960 · курсор / штрихи", "1280 · максимум"])
+        self.detail.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.detail.setMinimumContentsLength(10)
+        self.detail.setCurrentIndex(2)
+        self.detail.setToolTip("Довга сторона кадру аналізу. Більше деталей допомагає зберегти тонкі лінії, але аналіз займає довше.")
+        self.detail.currentIndexChanged.connect(self.analysis_changed)
+        form.addRow("Деталізація, px", self.detail)
         self.minimum.valueChanged.connect(self.replan)
         self.padding.valueChanged.connect(self.replan)
         self.frequency.valueChanged.connect(self.analysis_changed)
@@ -322,6 +389,9 @@ class Window(QMainWindow):
         self.detection.currentIndexChanged.connect(self.area_mode)
         form.addRow("Detection Area", self.detection)
         settings_layout.addLayout(form)
+        self.pause_help = QLabel()
+        self.pause_help.setWordWrap(True)
+        settings_layout.addWidget(self.pause_help)
         self.area_label = QLabel("Select Custom Area, then drag on the original video.\nOnly detection is cropped; export stays full frame.")
         self.area_label.setWordWrap(True)
         settings_layout.addWidget(self.area_label)
@@ -336,7 +406,7 @@ class Window(QMainWindow):
         self.speed.addItems(["2×", "5×", "10×", "20×"])
         self.speed.setCurrentIndex(1)
         self.speed.currentIndexChanged.connect(self.speed_changed)
-        settings_layout.addWidget(QLabel("Idle Playback Speed (also used for manual Speed Up)"))
+        settings_layout.addWidget(QLabel("Швидкість прискорених ділянок"))
         settings_layout.addWidget(self.speed)
         self.analyze_button = QPushButton("Analyze Video")
         self.analyze_button.setObjectName("primary")
@@ -350,17 +420,37 @@ class Window(QMainWindow):
         settings_layout.addWidget(self.status)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
-        settings_layout.addWidget(self.progress)
+        self.eta_label = QLabel("Час аналізу буде оцінено після перших кадрів.")
+        self.eta_label.setWordWrap(True)
         self.cancel = QPushButton("Cancel")
         self.cancel.clicked.connect(self.cancel_job)
-        settings_layout.addWidget(self.cancel)
         settings_layout.addStretch()
         note = QLabel("All processing happens on your computer.\nOriginal files are never changed.\nDetection is heuristic: inspect the timeline before exporting.")
         note.setWordWrap(True)
         settings_layout.addWidget(note)
+        for label in side.findChildren(QLabel):
+            label.setWordWrap(True)
         self.sidebar.setWidget(side)
         splitter.addWidget(self.sidebar)
         splitter.setSizes([900, 310])
+        # Keep progress, ETA and cancellation visible even when settings scroll.
+        footer = QHBoxLayout()
+        phase = QVBoxLayout()
+        self.phase_label = QLabel("Готово до відкриття відео")
+        phase.addWidget(self.phase_label)
+        phase.addWidget(self.eta_label)
+        footer.addLayout(phase, 3)
+        footer.addWidget(self.progress, 2)
+        footer.addWidget(self.cancel)
+        layout.addLayout(footer)
+        self.eta_timer = QTimer(self)
+        self.eta_timer.setInterval(500)
+        self.eta_timer.timeout.connect(self.update_analysis_eta)
+        self.drop_filter = VideoDropFilter(self)
+        for widget in [self, *self.findChildren(QWidget)]:
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self.drop_filter)
+        self.update_pause_help()
         self.refresh_controls()
 
     @staticmethod
@@ -373,7 +463,8 @@ class Window(QMainWindow):
         return spin
 
     def settings(self):
-        return Settings(self.sensitivity.value(), self.minimum.value(), self.padding.value(), self.frequency.value(), self.area)
+        return Settings(self.sensitivity.value(), self.minimum.value(), self.padding.value(),
+                        self.frequency.value(), self.area, (320, 640, 960, 1280)[self.detail.currentIndex()])
 
     def speed_value(self):
         return (2, 5, 10, 20)[self.speed.currentIndex()]
@@ -381,9 +472,9 @@ class Window(QMainWindow):
     def refresh_controls(self):
         busy = self.worker is not None
         loaded = self.video is not None
-        for widget in (self.open_button,):
+        for widget in (self.open_button, self.drop_zone):
             widget.setEnabled(not busy)
-        for widget in (self.sensitivity, self.minimum, self.padding, self.frequency, self.detection, self.mode, self.speed):
+        for widget in (self.sensitivity, self.minimum, self.padding, self.frequency, self.detail, self.detection, self.mode, self.speed):
             widget.setEnabled(not busy)
         self.view.custom = loaded and not busy and self.detection.currentIndex() == 1 and self.preview_mode.currentIndex() == 0
         self.analyze_button.setEnabled(loaded and not busy)
@@ -397,7 +488,7 @@ class Window(QMainWindow):
         self.table.setEnabled(not busy)
         self.timeline.setEnabled(not busy)
 
-    def work(self, operation, done, stage):
+    def work(self, operation, done, stage, analysis=False):
         if self.worker:
             return
         self.player.pause()
@@ -405,11 +496,18 @@ class Window(QMainWindow):
         self.worker = worker
         worker.result.connect(done)
         worker.failure.connect(self.show_error)
-        worker.cancelled.connect(lambda: self.status.setText("Cancelled · temporary output removed"))
+        worker.cancelled.connect(self.operation_cancelled)
         worker.progress.connect(self.on_progress)
         worker.finished.connect(self.job_finished)
         self.status.setText(stage)
+        self.phase_label.setText(stage)
         self.progress.setRange(0, 0)
+        self.eta_label.setVisible(analysis)
+        if analysis:
+            self.analysis_estimate = AnalysisEstimate()
+            self.analysis_state = "running"
+            self.eta_timer.start()
+            self.update_analysis_eta()
         self.refresh_controls()
         worker.start()
 
@@ -417,12 +515,32 @@ class Window(QMainWindow):
         self.progress.setRange(0, 1000)
         self.progress.setValue(round(fraction*1000))
         self.status.setText(stage)
+        self.phase_label.setText(stage)
+        if self.analysis_state == "running":
+            self.analysis_estimate.update(fraction)
+            self.update_analysis_eta()
+
+    def update_analysis_eta(self):
+        if self.analysis_state != "running" or self.analysis_estimate is None:
+            return
+        elapsed = self.analysis_estimate.elapsed()
+        remaining = self.analysis_estimate.remaining()
+        estimate = "Визначаємо швидкість…" if remaining is None else f"Приблизно залишилось: {clock(remaining)}"
+        self.eta_label.setText(f"{estimate}\nМинуло: {clock(elapsed)} · оцінка змінюється зі швидкістю аналізу")
+
+    def operation_cancelled(self):
+        self.status.setText("Cancelled · temporary output removed")
+        self.phase_label.setText("Операцію скасовано")
+        if self.analysis_state in ("running", "cancelling"):
+            self.analysis_state = "cancelled"
+            self.eta_label.setText("Аналіз скасовано. Оцінку часу зупинено.")
 
     def job_finished(self):
         old = self.worker
         self.worker = None
         old.deleteLater()
         self.progress.setRange(0, 1000)
+        self.eta_timer.stop()
         if self.preview_mode.currentIndex() == 1 and self.preview_path is None:
             self.preview_mode.setCurrentIndex(0)
         self.refresh_controls()
@@ -433,8 +551,15 @@ class Window(QMainWindow):
         if self.worker:
             self.worker.job.cancel()
             self.status.setText("Cancelling…")
+            if self.analysis_state == "running":
+                self.analysis_state = "cancelling"
+                self.eta_label.setText("Скасування аналізу…")
 
     def show_error(self, message):
+        self.phase_label.setText("Помилка · дивіться повідомлення")
+        if self.analysis_state in ("running", "cancelling"):
+            self.analysis_state = "failed"
+            self.eta_label.setText("Аналіз не завершено через помилку.")
         self.status.setText(message[-1500:])
         if not self.closing:
             QMessageBox.warning(self, "Smart Video Cutter", message[-3500:])
@@ -445,6 +570,8 @@ class Window(QMainWindow):
             self.open_video(path)
 
     def open_video(self, path):
+        if self.worker:
+            return
         if self.plan and QMessageBox.question(self, "Open another video?", "Discard the current editing plan?") != QMessageBox.Yes:
             return
         self.work(lambda job, progress: probe(path, job), self.loaded, "Reading video metadata")
@@ -459,6 +586,10 @@ class Window(QMainWindow):
         self.area = (0, 0, 1, 1)
         self.detection.setCurrentIndex(0)
         self.dirty = False
+        self.analysis_state = "idle"
+        self.analysis_estimate = None
+        self.eta_label.setText("Час аналізу буде оцінено після перших кадрів.")
+        self.eta_label.show()
         self.timeline.index = -1
         self.view.dimensions(video.display_width, video.height)
         self.cleanup_cache()
@@ -468,6 +599,7 @@ class Window(QMainWindow):
         self.player.setSource(QUrl.fromLocalFile(str(video.path)))
         self.metadata.setText(f"{video.path.name}  ·  {clock(video.duration)}  ·  {video.width} × {video.height}  ·  {video.fps:.2f} avg FPS\n{video.size/1024**2:.1f} MB  ·  {video.format}  ·  {'Audio' if video.audio else 'No audio'}")
         self.status.setText("Video loaded · configure detection and analyze")
+        self.phase_label.setText("Відео відкрито · налаштуйте аналіз")
         self.render_plan()
 
     def toggle_play(self):
@@ -498,12 +630,20 @@ class Window(QMainWindow):
             self.status.setText("Preview cannot play this codec. Use Compatible preview. " + message)
 
     def analysis_changed(self, *_):
-        self.sensitivity_label.setText(f"Motion Sensitivity · {self.sensitivity.value()}%")
+        self.sensitivity_label.setText(f"Чутливість до дрібного руху · {self.sensitivity.value()}%")
         if self.samples:
             self.dirty = True
             self.invalidate_preview()
             self.status.setText("Detection settings changed · Analyze Video again; displayed plan is from the previous analysis")
+        self.render_detection_stats()
         self.refresh_controls()
+
+    def update_pause_help(self):
+        self.pause_help.setText(
+            "Зберігаємо рух курсора, штрихи та зміни кольору. "
+            f"Паузу рахуємо від останньої зміни до наступної: вирізаємо лише від {self.minimum.value():g} с, "
+            f"залишаючи запас {self.padding.value():g} с біля руху. "
+            "Шум стиснення ігноруємо. Курсор має бути видимим у самому записі.")
 
     def area_mode(self, index):
         if index == 0:
@@ -527,6 +667,7 @@ class Window(QMainWindow):
             self.render_plan()
 
     def replan(self, *_):
+        self.update_pause_help()
         if self.samples and not self.dirty:
             self.automatic = make_plan(self.samples, self.video.duration, self.settings(),
                                        "remove" if self.mode.currentIndex() == 0 else "speed", self.speed_value())
@@ -540,9 +681,13 @@ class Window(QMainWindow):
         if self.detection.currentIndex() == 1 and settings.area == (0, 0, 1, 1):
             self.show_error("Draw a detection rectangle on the original video first")
             return
-        self.work(lambda job, progress: analyze(self.video, settings, job, progress), self.analyzed, "Starting motion analysis")
+        self.work(lambda job, progress: analyze(self.video, settings, job, progress), self.analyzed,
+                  "Аналіз руху, курсора та штрихів", analysis=True)
 
     def analyzed(self, samples):
+        self.analysis_state = "complete"
+        if self.analysis_estimate is not None:
+            self.eta_label.setText(f"Аналіз завершено за {clock(self.analysis_estimate.elapsed())}")
         self.samples = samples
         self.dirty = False
         self.replan()
@@ -551,16 +696,38 @@ class Window(QMainWindow):
         else:
             self.status.setText("Analysis complete · inspect the timeline before exporting")
 
+    def render_detection_stats(self):
+        self.detection_group.setTitle("Активність в оригінальному відео" + (" · попередній аналіз" if self.dirty else ""))
+        if not self.video or not self.samples:
+            for label, title in ((self.motion_value, "Рух / зміни"), (self.still_value, "Без руху"), (self.long_idle_value, "Довгі паузи")):
+                label.setText(title+"\n—")
+            self.ratio.setValue(0)
+            self.ratio.setFormat("Статистика з'явиться після аналізу")
+            return
+        detected = detection_statistics(self.samples, self.video.duration, self.minimum.value())
+        fraction = detected['motion_fraction']
+        self.motion_value.setText(f"Рух / зміни\n{clock(detected['motion'])} · {fraction:.1%}")
+        self.still_value.setText(f"Без руху\n{clock(detected['still'])} · {1-fraction:.1%}")
+        self.long_idle_value.setText(f"Паузи від {self.minimum.value():g} с · {detected['sections']}\n{clock(detected['long_idle'])}")
+        self.ratio.setValue(round(fraction*1000))
+        self.ratio.setFormat(f"Рух {fraction:.1%} / без руху {1-fraction:.1%}")
+
     def render_plan(self):
         self.timeline.plan = self.plan
         self.timeline.update()
         self.table.setRowCount(len(self.plan))
+        self.table.setVisible(bool(self.plan))
+        self.table.setMaximumHeight(34+min(4, len(self.plan))*self.table.verticalHeader().defaultSectionSize())
         for i, s in enumerate(self.plan):
             for j, value in enumerate((clock(s.start), clock(s.end), {"keep": "Keep", "remove": "Remove", "speed": f"Speed Up {s.speed}×"}[s.action])):
                 self.table.setItem(i, j, QTableWidgetItem(value))
         st = statistics(self.plan)
-        self.stats.setText(f"Original {clock(st['original'])}   ·   Active {clock(st['active'])}   ·   Idle {clock(st['idle'])}\nEstimated output {clock(st['output'])}   ·   Reduction {st['reduction']:.1f}%   ·   Idle sections {st['sections']}")
-        self.ratio.setValue(round(st['active']/max(.001, st['original'])*1000))
+        if self.plan:
+            self.stats.setText(f"План монтажу: зберегти {clock(st['active'])} на звичайній швидкості · обробити {clock(st['idle'])}\nРезультат ≈ {clock(st['output'])} · скорочення {st['reduction']:.1f}% · ділянок {st['sections']}")
+        else:
+            duration = self.video.duration if self.video else 0
+            self.stats.setText(f"Тривалість оригіналу: {clock(duration)} · натисніть Analyze Video, щоб визначити рух і паузи.")
+        self.render_detection_stats()
         if self.plan:
             index = min(max(0, self.timeline.index), len(self.plan)-1)
             self.populate_segment(index)
@@ -641,6 +808,7 @@ class Window(QMainWindow):
         self.player.setSource(QUrl.fromLocalFile(str(path)))
         self.view.outline.hide()
         self.status.setText("Edited preview ready · same plan as export, H.264/AAC")
+        self.phase_label.setText("Попередній перегляд готовий")
 
     def create_proxy(self):
         destination = self.cache / f"original-{uuid.uuid4().hex}.mp4"
@@ -650,6 +818,7 @@ class Window(QMainWindow):
         self.proxy_path = path
         self.player.setSource(QUrl.fromLocalFile(str(path)))
         self.status.setText("Compatible preview ready · analysis and export still use the original")
+        self.phase_label.setText("Сумісний перегляд готовий")
 
     def start_export(self):
         dialog = ExportDialog(self)
@@ -667,13 +836,11 @@ class Window(QMainWindow):
                                               crf=crf, mute=mute, encoder=encoder),
                   lambda path: self.status.setText(f"Export complete: {path}"), "Starting export")
 
-    def dragEnterEvent(self, event):
-        if not self.worker and event.mimeData().hasUrls() and len(event.mimeData().urls()) == 1 and event.mimeData().urls()[0].isLocalFile():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event):
-        if not self.worker:
-            self.open_video(event.mimeData().urls()[0].toLocalFile())
+    def highlight_drop(self, active):
+        if self.drop_zone.property("dragActive") != active:
+            self.drop_zone.setProperty("dragActive", active)
+            self.drop_zone.style().unpolish(self.drop_zone)
+            self.drop_zone.style().polish(self.drop_zone)
 
     def closeEvent(self, event):
         if self.worker:
@@ -693,6 +860,11 @@ QMainWindow { background: #191c23; }
 QLabel { background: transparent; }
 QLabel#brand { font-size: 22px; font-weight: 650; color: #eef4fc; padding: 6px 0; }
 QLabel#subtitle { font-size: 17px; font-weight: 600; }
+QLabel#activityValue { font-size: 12px; padding: 3px; }
+QGroupBox { border: 1px solid #343c49; border-radius: 6px; margin-top: 8px; padding-top: 10px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
+QPushButton#dropZone { border: 1px dashed #526174; background: #171e26; color: #b4c5d8; }
+QPushButton#dropZone[dragActive="true"] { border: 2px solid #65dcb6; background: #213a32; color: #92efd0; }
 QPushButton, QComboBox, QDoubleSpinBox { background: #2a303b; border: 1px solid #3b4351; border-radius: 6px; padding: 8px; }
 QPushButton:hover { background: #394352; }
 QPushButton:disabled { color: #657080; background: #222730; }

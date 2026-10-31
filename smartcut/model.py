@@ -5,15 +5,17 @@ from math import isfinite
 
 @dataclass(frozen=True)
 class Settings:
-    sensitivity: float = 80
-    min_idle: float = 1.5
-    padding: float = .4
-    sample_fps: float = 6
+    sensitivity: float = 95
+    min_idle: float = 3
+    padding: float = .6
+    sample_fps: float = 8
     area: tuple[float, float, float, float] = (0, 0, 1, 1)
+    analysis_width: int = 960
 
     def validate(self):
         if not (0 <= self.sensitivity <= 100 and .5 <= self.min_idle <= 10
-                and 0 <= self.padding <= 2 and 1 <= self.sample_fps <= 12):
+                and 0 <= self.padding <= 2 and 1 <= self.sample_fps <= 12
+                and self.analysis_width in (320, 640, 960, 1280)):
             raise ValueError("Invalid analysis settings")
         x, y, w, h = self.area
         if not all(isfinite(v) for v in self.area) or not (
@@ -58,16 +60,7 @@ def make_plan(samples, duration, settings, mode="remove", speed=5):
     Padding expands activity only after minimum-idle classification.
     """
     settings.validate()
-    active = []
-    previous = 0.
-    for time, _score, moving in samples:
-        time = min(duration, max(previous, time))
-        if moving:
-            active.append((previous, time))
-        previous = time
-    if samples and samples[-1][2]:
-        active.append((previous, duration))
-    merged = merge(active)
+    merged = activity_intervals(samples, duration)
     idle = complement(merged, duration)
     short = [(a, b) for a, b in idle if b - a < settings.min_idle]
     merged = merge(merged + short)
@@ -81,6 +74,30 @@ def make_plan(samples, duration, settings, mode="remove", speed=5):
         result.append(Segment(a, b, "keep" if keep else mode, speed))
     validate_plan(result, duration)
     return result
+
+
+def activity_intervals(samples, duration):
+    """Estimated motion in source time, before short-pause retention or padding."""
+    active = []
+    previous = 0.
+    for time, _score, moving in samples:
+        time = min(duration, max(previous, time))
+        if moving:
+            active.append((previous, time))
+        previous = time
+    if samples and samples[-1][2]:
+        active.append((previous, duration))
+    return merge(active)
+
+
+def detection_statistics(samples, duration, min_idle):
+    active = activity_intervals(samples, duration)
+    still = complement(active, duration)
+    long_pauses = [(a, b) for a, b in still if b-a >= min_idle]
+    motion = sum(b-a for a, b in active)
+    return dict(original=duration, motion=motion, still=duration-motion,
+                motion_fraction=motion/duration if duration else 0,
+                long_idle=sum(b-a for a, b in long_pauses), sections=len(long_pauses))
 
 
 def merge(intervals):

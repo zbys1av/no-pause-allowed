@@ -32,7 +32,8 @@ def test_sensitivity_and_noise():
     rng = np.random.default_rng(42)
     noisy = (original.astype(int)+rng.integers(-2, 3, original.shape)).astype(np.uint8)
     assert not motion_score(original, noisy, 100)[1]
-    assert not motion_score(original, original+15, 100)[1]
+    assert not motion_score(original, original+2, 100)[1]
+    assert motion_score(original, original+15, 100)[1]  # a real canvas change is activity
 
 
 def test_manual_edit_and_duration():

@@ -38,7 +38,7 @@ def clips(tmp_path_factory):
 def test_static_10_seconds(clips):
     video = probe(clips[1])
     samples = analyze(video, Settings(), Job())
-    assert 40 < len(samples) <= 61
+    assert 60 < len(samples) <= 81
     assert not any(s[2] for s in samples)
     assert make_plan(samples, video.duration, Settings()) == [Segment(0, 10, "remove")]
 

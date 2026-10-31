@@ -54,6 +54,8 @@ def test_open_analyze_preview_worker_pipeline(tmp_path):
     window.start_analysis()
     wait_until(lambda: window.worker is None)
     assert window.plan and window.export_button.isEnabled()
+    assert 'Аналіз завершено' in window.eta_label.text()
+    assert not window.eta_timer.isActive()
     window.preview_mode.setCurrentIndex(1)
     wait_until(lambda: window.worker is None)
     assert window.preview_path.is_file()

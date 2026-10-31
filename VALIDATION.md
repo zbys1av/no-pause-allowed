@@ -1,15 +1,31 @@
-# Validation — Windows portable, 2026-10-31
+# Validation — Windows portable 1.1, 2026-10-31
 
 Source environment: Debian 13, Python 3.12.14, Qt/PySide6 6.8.3 LTS,
 NumPy 2.5.4, external FFmpeg 7.1.5. Locked dependency installation passed.
 
-Full source suite: **24 passed**, 39.94 seconds, no skips or expected failures.
+Full source suite: **33 passed**, 28.46 seconds, no skips or expected failures.
 Coverage includes motion/static/noise/small changes, sensitivity, ROI, padding,
 manual boundaries, VFR, rotation/SAR, original-file protection, mute/proxy,
 cancellation, export at every idle speed, frame ordering and black-frame checks,
 audio tone markers and delayed audio, GUI workers and mouse selection.
 Portable tests reject checksum mismatches and preserve upstream notices.
 Compilation, Git whitespace and workflow YAML checks passed.
+
+## Fine drawing and interface regression checks
+
+A streamed lossless 1080p fixture contains 2 seconds of a tiny cursor, 4 seconds
+of complete stillness and 2 seconds of one-pixel brush growth. The new detector
+preserves both motion blocks and removes only the real pause after padding.
+Other new checks cover gradual accumulated strokes, equal-luminance color
+changes, chroma/compression noise, source-time movement/still statistics, ETA
+calibration and stalled progress, real drops on the zone/player/table, rejected
+multi-file/remote drops, busy-state rejection and timer completion. After the
+final version/title update the four GUI tests passed again in 1.71 seconds.
+
+Defaults: sensitivity 95%, minimum idle 3 seconds, padding 0.6 seconds,
+8 samples/second and 960 px RGB detail. Memory retains at most three analysis
+frames; source media is still streamed. Source movement/still statistics remain
+independent of padding, acceleration and manual Keep decisions.
 
 ## Actual Windows executable
 
@@ -27,7 +43,7 @@ The relocated EXE's `--portable-self-test` returned:
   "frozen": true,
   "ffmpeg": "ffmpeg.exe",
   "ffprobe": "ffprobe.exe",
-  "analysis_samples": 18,
+  "analysis_samples": 24,
   "output_duration": 2.999,
   "audio": true,
   "decoded_video_frame": true

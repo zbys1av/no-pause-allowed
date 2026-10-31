@@ -1,4 +1,4 @@
-Smart Video Cutter — Windows 10/11 x64 Portable
+Smart Video Cutter 1.1 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -10,6 +10,11 @@ Keep _internal and tools next to the EXE. Do not launch from inside the ZIP.
 Do not move only the EXE out of this folder.
 
 Open Video -> Analyze Video -> inspect the timeline -> Export Video.
+Drag a video onto the drop zone or the player to open it quickly.
+Analysis shows an approximate remaining time based on its measured speed.
+Source movement/still-time statistics are separate from the editing plan.
+Defaults preserve fine drawing: 95% sensitivity, 960 px detail, 8 samples/s,
+minimum idle 3 seconds and 0.6 seconds of padding around movement.
 If a source codec cannot play, choose Compatible preview.
 The original video is never overwritten.
 

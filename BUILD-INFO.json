@@ -1,15 +1,29 @@
 {
-  "source_commit": "9c6887b61b71bd5adeb53cb27bbf9ea4caaaf7b7",
+  "version": "1.1.0",
+  "source_commit": "57fbdba566890e71bb705db1b4d755c4c33d0aea",
   "target": "Windows 10/11 x64",
   "python": "3.12.14",
   "qt": "6.8.3",
   "ffmpeg": "8.0.1",
+  "analysis_defaults": {
+    "sensitivity": 95,
+    "min_idle": 3,
+    "padding": 0.6,
+    "sample_fps": 8,
+    "area": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "analysis_width": 960
+  },
   "self_test": {
     "ok": true,
     "frozen": true,
     "ffmpeg": "ffmpeg.exe",
     "ffprobe": "ffprobe.exe",
-    "analysis_samples": 18,
+    "analysis_samples": 24,
     "output_duration": 2.999,
     "audio": true,
     "decoded_video_frame": true

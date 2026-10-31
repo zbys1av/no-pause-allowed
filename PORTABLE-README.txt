@@ -1,4 +1,4 @@
-Smart Video Cutter 1.2 — Windows 10/11 x64 Portable
+Smart Video Cutter 1.3 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -29,3 +29,7 @@ Only the language preference is stored next to the EXE, when writable.
 
 Source and documentation: https://github.com/zbys1av/no-pause-allowed
 Third-party notices: THIRD_PARTY.md, licenses/ and tools/licenses/.
+
+Save debug report / Зберегти звіт: save the ZIP after analysis or an error,
+then send that file for diagnosis. Contains decisions, scores and errors,
+not the video or audio. Technical errors and the filename may identify files.

@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "frozen": true,
+  "ffmpeg": "ffmpeg.exe",
+  "ffprobe": "ffprobe.exe",
+  "analysis_samples": 24,
+  "output_duration": 3.0,
+  "audio": true,
+  "decoded_video_frame": true,
+  "version": "1.4.0",
+  "localized_ui": true,
+  "svg_icons": true,
+  "simple_mode": true,
+  "debug_report": true,
+  "local_cycles": true
+}

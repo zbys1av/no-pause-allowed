@@ -10,7 +10,7 @@ from smartcut.process import tool
 
 def test_ui_plan_editing_and_invalidation():
     app = QApplication.instance() or QApplication([])
-    window = Window()
+    window = Window(language='uk', remember=False)
     window.video = Video(Path("/tmp/example.mp4"), 10, 320, 180, 24, 100, "mp4", False)
     window.plan = [Segment(0, 3), Segment(3, 7, "remove"), Segment(7, 10)]
     window.automatic = list(window.plan)
@@ -35,7 +35,7 @@ def test_open_analyze_preview_worker_pipeline(tmp_path):
     source = tmp_path/"drawing.mp4"
     subprocess.run([tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                     "testsrc2=s=160x90:r=24:d=3", "-c:v", "libx264", str(source)], check=True)
-    window = Window()
+    window = Window(language='uk', remember=False)
     errors = []
     window.show_error = errors.append
     window.show()

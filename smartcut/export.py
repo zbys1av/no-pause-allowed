@@ -4,6 +4,8 @@ from pathlib import Path
 import tempfile
 from .model import validate_plan
 from .process import run, tool
+from .errors import AppError
+from .i18n import Text
 
 
 def tempo(speed):
@@ -20,17 +22,17 @@ def export(video, plan, destination, job, progress=lambda *_: None,
     validate_plan(plan, video.duration)
     destination = Path(destination).absolute()
     if destination.resolve() == video.path.resolve():
-        raise ValueError("The original video can never be overwritten")
+        raise AppError("error.original")
     if destination.exists():
-        raise ValueError("Output already exists. Choose a new filename")
+        raise AppError("error.exists")
     if destination.suffix.lower() != ".mp4":
-        raise ValueError("The output filename must end in .mp4")
+        raise AppError("error.mp4")
     if crf not in (18, 23, 28) or encoder not in ("libx264", "h264_nvenc", "h264_qsv", "h264_amf"):
-        raise ValueError("Unsupported export quality or encoder")
+        raise AppError("error.encoder")
     kept = [s for s in plan if s.action != "remove"]
     total = sum(s.output_duration for s in kept)
     if not kept or total < .02:
-        raise ValueError("No output remains. Increase sensitivity or manually keep a section")
+        raise AppError("error.empty")
     # Same volume as destination: final hard-link publishes atomically, without clobber.
     with tempfile.TemporaryDirectory(prefix="smartcut-", dir=destination.parent) as directory:
         temp = Path(directory)
@@ -75,24 +77,27 @@ def export(video, plan, destination, job, progress=lambda *_: None,
                          "-ac", "2", "-c:a", "pcm_s16le"]
             else:
                 args += ["-an"]
-            args += ["-t", f"{s.output_duration:.9f}", "-progress", "pipe:1", str(temp / f"part{i}.mkv")]
+            # MOV carries explicit decode timing for H.264 and supports PCM.
+            # Matroska may omit DTS; remuxing a short FFV1-derived segment can
+            # then infer 1000 fps and collapse an otherwise valid 0.7 s cut.
+            args += ["-t", f"{s.output_duration:.9f}", "-progress", "pipe:1", str(temp / f"part{i}.mov")]
             base = done
             run(args, job, s.output_duration,
                 lambda fraction, stage: progress(.9*(base+fraction*s.output_duration)/total, stage),
-                f"Encoding section {i+1}/{len(kept)}")
+                Text("stage.encoding", {"section":i+1,"count":len(kept)}))
             done += s.output_duration
         manifest = temp / "segments.txt"
-        manifest.write_text("".join(f"file 'part{i}.mkv'\nduration {s.output_duration:.9f}\n" for i, s in enumerate(kept)), encoding="utf-8")
+        manifest.write_text("".join(f"file 'part{i}.mov'\nduration {s.output_duration:.9f}\n" for i, s in enumerate(kept)), encoding="utf-8")
         args = [tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
                 "-f", "concat", "-safe", "1", "-i", str(manifest), "-map", "0:v:0", "-c:v", "copy"]
         args += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"] if audio else ["-an"]
         pending = temp / "output.mp4"
         args += ["-t", f"{total:.9f}", "-movflags", "+faststart", "-progress", "pipe:1", str(pending)]
-        run(args, job, total, lambda f, stage: progress(.9+.1*f, stage), "Finalizing MP4")
+        run(args, job, total, lambda f, stage: progress(.9+.1*f, stage), Text("stage.finalizing"))
         job.check()
         # os.link fails rather than replacing a file created concurrently.
         os.link(pending, destination)
-    progress(1., "Export complete")
+    progress(1., Text("stage.export_complete"))
     return destination
 
 

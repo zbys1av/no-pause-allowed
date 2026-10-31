@@ -1,41 +1,98 @@
-# Validation — Windows portable 1.1, 2026-10-31
+# Smart Video Cutter 1.2 — перевірка, 2026-10-31
 
-Source environment: Debian 13, Python 3.12.14, Qt/PySide6 6.8.3 LTS,
-NumPy 2.5.4, external FFmpeg 7.1.5. Locked dependency installation passed.
+## Причина та виправлення
 
-Full source suite: **33 passed**, 28.46 seconds, no skips or expected failures.
-Coverage includes motion/static/noise/small changes, sensitivity, ROI, padding,
-manual boundaries, VFR, rotation/SAR, original-file protection, mute/proxy,
-cancellation, export at every idle speed, frame ordering and black-frame checks,
-audio tone markers and delayed audio, GUI workers and mouse selection.
-Portable tests reject checksum mismatches and preserve upstream notices.
-Compilation, Git whitespace and workflow YAML checks passed.
+У попередньому пайплайні кожний виявлений рух розривав статичну ділянку.
+Мінімальна тривалість застосовувалася до кожної паузи, а не до суми
+нерухомого часу. Тому велика сума статичних кадрів могла давати нуль Remove:
+всі безперервні паузи були надто короткими. Часової стабілізації не було,
+а інтерфейс недостатньо пояснював цю різницю.
 
-## Fine drawing and interface regression checks
+Регресія відтворює 20 секунд зі сплесками по 0,2 с кожні 2 секунди.
+Без фільтрації: понад 17 секунд нерухомості, жодної паузи від 3 с і нуль
+вирізань. З фільтром 0,3 с: 9 об'єднаних підтверджених сплесків та одна
+довга пауза. Вирізання не додаються штучно.
 
-A streamed lossless 1080p fixture contains 2 seconds of a tiny cursor, 4 seconds
-of complete stillness and 2 seconds of one-pixel brush growth. The new detector
-preserves both motion blocks and removes only the real pause after padding.
-Other new checks cover gradual accumulated strokes, equal-luminance color
-changes, chroma/compression noise, source-time movement/still statistics, ETA
-calibration and stalled progress, real drops on the zone/player/table, rejected
-multi-file/remote drops, busy-state rejection and timer completion. After the
-final version/title update the four GUI tests passed again in 1.71 seconds.
+Точний тригер у записі **15:52,87 не встановлений**: надано опис і числа,
+але самого відео немає. Механізм відтворено в коді та на згенерованих відео;
+виправлення саме цього реального запису тут не перевірено.
 
-Defaults: sensitivity 95%, minimum idle 3 seconds, padding 0.6 seconds,
-8 samples/second and 960 px RGB detail. Memory retains at most three analysis
-frames; source media is still streamed. Source movement/still statistics remain
-independent of padding, acceleration and manual Keep decisions.
+Новий порядок: оцінки кадрів → просторовий шумовий фільтр → стабілізація →
+інтервали → мінімальна пауза → запас → об'єднання → доступні вирізання →
+канонічний план → тривалість/preview/export. Формування сегментів і облік
+перекритих запасом пауз більше не мають попарного квадратичного проходу.
 
-## Actual Windows executable
+Короткий сплеск об'єднується тільки за підтвердженням повернення зображення
+або малої точної трансляції однакових протилежних масок імовірного курсора.
+Сталий штрих, накопичені повільні зміни та невідома ознака зберігаються.
+Залишилися потоковий аналіз, ROI та RGB-деталізація. Зберігаються максимум
+чотири опорні кадри й оцінки, а не весь запис.
 
-Built using real Windows x64 Python 3.12.14, PyInstaller 6.22.3 and locked
-Windows wheels under Wine 10 on Linux. The distribution includes Qt, Python
-runtime DLLs and official Gyan FFmpeg/FFprobe 8.0.1 Essentials executables.
-The FFmpeg archive SHA-256 was verified against Microsoft WinGet's manifest.
-No dependencies are downloaded at application startup.
+Реальний тест виявив ще одну помилку: проміжний MKV для короткої ділянки
+FFV1-входу міг втрачати DTS. Remux перетворював 0,7 с на 0,007 с.
+Проміжні MOV з явними часовими мітками й PCM виправляють це.
+Кінцевий формат залишається MP4/H.264/AAC.
 
-The relocated EXE's `--portable-self-test` returned:
+## Інтерфейс
+
+- Чотири кроки, центральний плеєр, таймлайн і доступні кнопки експорту.
+- Простий режим із трьома параметрами; розширені параметри, ручна таблиця
+  й діагностика початково згорнуті. Параметри мають опис, підказку та скидання.
+- Три справжні профілі; типово — «Цифрове малювання».
+- Окремі метрики: сирий нерухомий час, придатні паузи та реальні Remove.
+  Є пояснення відсутності скорочення, рекомендації, найдовші паузи й графік.
+- Спільний український/англійський каталог кнопок, статусів, помилок і описів;
+  також підключено стандартний український каталог Qt.
+- Явні стани операцій; після скасування прогрес прибирається, запізнілі
+  сигнали ігноруються, старий коректний результат явно підписаний.
+  Застарілий план заблокований для експорту й preview.
+- Незмінений план має окремий підпис і підтвердження експорту.
+  Порожній MP4 не створюється.
+- Пропозиція сумісного перегляду при помилці кодека, drag/drop, ETA,
+  16 Lucide SVG, темна тема та плавна поява розгорнутих розділів.
+
+## Автоматизовані перевірки
+
+Debian 13, Python 3.12.14, PySide6/Qt 6.8.3 LTS, NumPy 2.5.4,
+системний FFmpeg 7.1.5. Зафіксовані залежності встановлено успішно.
+
+Команда: `QT_QPA_PLATFORM=offscreen QT_AUDIO_BACKEND=pulseaudio .venv/bin/python -m pytest -q`.
+
+**47 passed in 43.50s**, без пропусків. Після останнього уточнення
+діагностики сім тестів UX/локалізації/скасування повторно пройшли за 8,02 с.
+
+Перевірено:
+
+- Статичний запис; 5 с руху / 8 с паузи / 5 с руху; постійний рух;
+  багато коротких пауз; повне перекриття паузи запасом.
+- Курсорний сплеск 0,2 с та короткий сталий штрих: реальне декодування,
+  фільтрація, експорт, тривалість через FFprobe та наявність штриха в кадрі.
+- Дрібний курсор/однопіксельний штрих на 1080p, поступові зміни,
+  однакова яскравість різних кольорів, шум, ROI, VFR, поворот і SAR.
+- План без прогалин/перекриттів; ручні дії й межі; узгодженість
+  статистики та експорту; усі швидкості пауз.
+- Послідовність кадрів, відсутність чорних стиків, аудіомаркери,
+  затримане аудіо, mute/proxy та незмінність оригіналу.
+- Скасування реальних процесів і прибирання незавершених файлів;
+  GUI-скасування першого/повторного аналізу, збереження старого результату,
+  скидання прогресу/таймера та блокування застарілого плану.
+- Мови, профілі, простий/розширений режим, reset, no-op підтвердження,
+  пояснення padding та помилка відкриття зі збереженням старого монтажу.
+- Qt-плеєр, фонові операції, mouse ROI, drag/drop та ETA.
+
+Компіляція модулів, `uv.lock` і `git diff --check` пройшли.
+Інтерфейс оглянуто на 1280×920 та 960×722; менше вікно має прокрутку
+панелей, а таймлайн і експорт залишаються доступними.
+
+## Готовий Windows EXE
+
+Справжній Windows x64 Python 3.12.14, PyInstaller 6.22.3 і Windows wheels
+під Wine 10. Усередині — Python/Qt/NumPy, SVG, переклади Qt,
+офіційні Gyan FFmpeg/FFprobe 8.0.1 та ліцензії. SHA-256 FFmpeg раніше
+перевірено за зафіксованим маніфестом Microsoft WinGet.
+
+Переміщений EXE запущено поза checkout. Self-test прибирає зовнішні
+Python/FFmpeg із PATH, залишаючи приватні DLL/інструменти й System32:
 
 ```json
 {
@@ -44,34 +101,33 @@ The relocated EXE's `--portable-self-test` returned:
   "ffmpeg": "ffmpeg.exe",
   "ffprobe": "ffprobe.exe",
   "analysis_samples": 24,
-  "output_duration": 2.999,
+  "output_duration": 3.0,
   "audio": true,
-  "decoded_video_frame": true
+  "decoded_video_frame": true,
+  "version": "1.2.0",
+  "localized_ui": true,
+  "svg_icons": true,
+  "simple_mode": true
 }
 ```
 
-The EXE ran outside the checkout with only bundled DLL/tool directories and
-Windows System32 on PATH. It generated real H.264/AAC media, probed it, streamed
-motion analysis, exported MP4 with audio and decoded a frame in the packaged
-Qt player. The headless test disconnects physical audio output; the encoded
-audio track remains present and validated. A virtual display/audio sink was
-used only in Wine, never added to the application or required on the user's PC.
+EXE створив H.264/AAC, виконав probe/аналіз/експорт і декодував кадр
+у плеєрі. Headless-перевірка від'єднує фізичний аудіовихід; наявність
+звукової доріжки перевіряється. Віртуальні display/audio потрібні лише
+тестовому Wine, їх немає в дистрибутиві.
 
-Packaging work corrected frozen-process DLL inheritance, progress-pipe handling
-and encoder lookahead. CPU H.264 uses zerolatency tuning to bound buffering;
-CRF quality settings remain 18/23/28.
+Portable не завантажує залежності при запуску: розпакуйте всю папку
+й запустіть EXE. Зміни та збірка підготовлені локально.
+**Push до GitHub не виконувався**, як вказано в останньому ТЗ.
 
-## Distribution and limits
+## Межі перевірки
 
-The `portable-windows` branch contains the ready-to-run folder. GitHub generates
-its ZIP directly, without Actions or a local build by the user. Source code
-and build recipes remain on `main`. The Windows workflow also rebuilds,
-extracts, tests and publishes a ZIP when Actions is available.
+Короткий точний рух іншого малого об'єкта може виглядати як курсор,
+а стиснення може завадити підтвердженню сплеску. Непевні сплески
+зберігаються; фільтр можна вимкнути. Дії між вибраними кадрами або
+втрачені при масштабуванні можуть бути пропущені.
 
-GitHub Actions could not run here: the existing run reports "The job was not
-started because your account is locked due to a billing issue." The portable
-was built locally instead; that restriction does not prevent branch downloads.
-
-Not certified here: native Windows 10/11 hardware, physical speaker playback,
-hardware encoders, long real recordings, HDR and code signing. Wine/media tests
-do not replace those checks. The EXE is unsigned.
+Не перевірено: користувацький запис 15:52,87, нативні Windows 10/11,
+фізичний звук, апаратні енкодери та довгі реальні записи. Пакет не підписаний.
+Wine й фікстури не замінюють цих перевірок. HDR/tone mapping, збереження
+сесій і додаткові аудіо/субтитрові доріжки не реалізовані.

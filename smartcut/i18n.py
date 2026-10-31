@@ -1,0 +1,188 @@
+"""One catalog for UI, worker stages, explanations and application errors."""
+from dataclasses import dataclass, field
+
+CATALOG = {
+ 'app': ('Smart Video Cutter', 'Smart Video Cutter'),
+ 'step.video': ('1  Відео', '1  Video'), 'step.settings': ('2  Налаштування', '2  Settings'),
+ 'step.analyze': ('3  Аналіз', '3  Analyze'), 'step.review': ('4  Перевірка й експорт', '4  Review & export'),
+ 'open': ('Відкрити відео', 'Open Video'), 'settings': ('Налаштування', 'Settings'),
+ 'language': ('Мова інтерфейсу', 'Interface language'), 'close': ('Закрити', 'Close'),
+ 'unit.seconds': ('с', 's'),
+ 'file.filter': ('Відео (*.mp4 *.mov *.mkv *.webm *.avi)', 'Video (*.mp4 *.mov *.mkv *.webm *.avi)'),
+ 'drop': ('Перетягніть відео сюди\nабо натисніть, щоб відкрити файл', 'Drop your video here\nor click to open a file'),
+ 'formats': ('MP4 · MOV · MKV · WebM · AVI — усе обробляється локально', 'MP4 · MOV · MKV · WebM · AVI — processed locally'),
+ 'file.details': ('Про файл', 'File Details'), 'file.audio': ('Звук є', 'Audio present'),
+ 'file.silent': ('Без звуку', 'No audio'),
+ 'file.info': ('{name}\nТривалість: {duration}\nРозмір кадру: {width} × {height}\nСередній FPS: {fps}\nФайл: {size} МБ\nФормат: {format}\n{audio}', '{name}\nDuration: {duration}\nFrame size: {width} × {height}\nAverage FPS: {fps}\nFile: {size} MB\nFormat: {format}\n{audio}'),
+ 'play': ('Відтворити', 'Play'), 'pause': ('Пауза', 'Pause'),
+ 'original': ('Оригінал', 'Original'), 'edited': ('Після монтажу', 'Edited'),
+ 'codec.offer': ('Цей кодек не відтворюється у плеєрі. Можна підготувати сумісну копію для перегляду; оригінал не зміниться.', 'The player cannot play this codec. Prepare a compatible viewing copy; the original stays unchanged.'),
+ 'codec.prepare': ('Підготувати перегляд', 'Prepare playback'),
+ 'profile': ('Профіль обробки', 'Analysis profile'),
+ 'profile.drawing': ('Цифрове малювання', 'Digital Drawing'),
+ 'profile.screen': ('Запис екрана', 'Screen Recording'),
+ 'profile.general': ('Звичайне відео', 'General Video'),
+ 'profile.note': ('Готові початкові параметри, не автоматичне розпізнавання. Їх можна змінити.', 'Starting presets, not automatic recognition. You can adjust them.'),
+ 'sensitivity': ('Чутливість до руху', 'Motion Sensitivity'),
+ 'sensitivity.help': ('Вища чутливість зберігає дрібні рухи й штрихи, але може знаходити менше пауз.', 'Higher sensitivity keeps small movements and strokes, but may find fewer pauses.'),
+ 'sensitivity.scale': ('Низька                 Збалансована                 Висока', 'Low                    Balanced                    High'),
+ 'minimum': ('Мінімальна пауза', 'Minimum Pause Length'),
+ 'minimum.help': ('При 3 с зупинки коротші за 3 секунди залишаться у відео.', 'At 3 s, stops shorter than three seconds stay in the video.'),
+ 'mode': ('Що робити з паузами', 'What to do with pauses'),
+ 'mode.remove': ('Видалити паузи', 'Remove pauses'), 'mode.speed': ('Прискорити паузи', 'Speed up pauses'),
+ 'mode.help': ('Видалення прибирає відео й звук пауз. Прискорення залишає їх у стислому вигляді.', 'Removal cuts pause video and audio. Speed-up keeps them in a shorter form.'),
+ 'advanced': ('Розширені параметри', 'Advanced Settings'),
+ 'padding': ('Запас біля руху', 'Motion Padding'),
+ 'padding.help': ('Залишає трохи відео до та після дії. Наприклад, 0,6 с пом’якшує переходи.', 'Keeps a little video before and after an action. For example, 0.6 s softens cuts.'),
+ 'debounce': ('Фільтрація коротких сплесків', 'Motion Debouncing'),
+ 'debounce.help': ('Об’єднує паузи через короткі підтверджені сплески курсора/шуму. Нові штрихи з постійною зміною зберігаються. 0 вимикає фільтр.', 'Joins pauses across brief confirmed cursor/noise bursts. Lasting new strokes are protected. Set 0 to disable.'),
+ 'fps': ('Частота аналізу', 'Analysis FPS'),
+ 'fps.help': ('Більше кадрів за секунду краще виявляє швидкі дії, але аналіз займає довше.', 'More samples per second catch faster actions but take longer to analyze.'),
+ 'detail': ('Деталізація аналізу', 'Detection Resolution'),
+ 'detail.help': ('Довга сторона зменшеного кадру. 960 px підходить для тонких штрихів; оригінал експортується повністю.', 'Long edge of the analysis image. 960 px suits fine strokes; export uses the full original.'),
+ 'area': ('Область аналізу', 'Detection Area'),
+ 'area.full': ('Увесь кадр', 'Full Frame'), 'area.custom': ('Виділити полотно', 'Custom Area'),
+ 'area.help': ('Виділіть полотно мишею на оригіналі, щоб ігнорувати панелі й сповіщення. Експорт залишається повнокадровим.', 'Drag over the original canvas to ignore panels and notifications. Export stays full frame.'),
+ 'area.selected': ('Область: x {x}%, y {y}%, ширина {w}%, висота {h}%', 'Area: x {x}%, y {y}%, width {w}%, height {h}%'),
+ 'speed': ('Швидкість пауз', 'Idle Playback Speed'),
+ 'speed.help': ('Використовується для режиму прискорення й ручних ділянок «Прискорити».', 'Used for speed-up mode and manually accelerated sections.'),
+ 'default': ('Типово: {value}', 'Default: {value}'), 'reset': ('Скинути', 'Reset to Default'),
+ 'analyze': ('Аналізувати відео', 'Analyze Video'), 'reanalyze': ('Повторити аналіз', 'Analyze Again'),
+ 'preview': ('Переглянути результат', 'Preview Result'), 'export': ('Експортувати відео', 'Export Video'),
+ 'export.unchanged': ('Експортувати без скорочення', 'Export unchanged'),
+ 'export.previous': ('Експортувати попередній результат', 'Export previous result'),
+ 'cancel': ('Скасувати', 'Cancel'), 'cancel.pending': ('Скасування…', 'Cancelling…'),
+ 'results': ('Результат аналізу', 'Analysis results'),
+ 'results.hint': ('Перегляньте кольорові ділянки. Ручні зміни необов’язкові.', 'Review the colored sections. Manual changes are optional.'),
+ 'metric.original': ('Оригінал', 'Original duration'), 'metric.output': ('Після монтажу', 'Estimated output'),
+ 'metric.motion': ('Рух і зміни', 'Movement and changes'),
+ 'metric.raw': ('Без суттєвого руху', 'Little/no movement'),
+ 'metric.pauses': ('Придатні паузи', 'Qualifying pauses'), 'metric.removed': ('Буде вирізано', 'Will be removed'),
+ 'metric.reduction': ('Скорочення', 'Reduction'),
+ 'metric.pause_value': ('{time} · {count} ділянок', '{time} · {count} sections'),
+ 'metric.raw_help': ('Сума нерухомих інтервалів на рівні кадрів, ще до часової фільтрації.', 'Frame-level still time, before temporal stabilization.'),
+ 'metric.pause_help': ('Безперервні паузи після фільтрації сплесків і перевірки мінімальної тривалості, до запасу.', 'Continuous pauses after burst filtering and minimum length, before padding.'),
+ 'metric.removed_help': ('Реальні сегменти «Видалити» після запасу й ручних правок. При прискоренні цей час може бути нульовим.', 'Actual Remove sections after padding and manual edits. This may be zero in speed-up mode.'),
+ 'result.changed': ('План містить реальні зміни. Перевірте перегляд перед експортом.', 'The plan contains real edits. Preview before exporting.'),
+ 'result.none': ('Знайдено {idle} моментів без суттєвого руху, але вони розділені рухами або коротші за мінімальну паузу.', 'Found {idle} of little/no movement, but those moments are separated by movement or shorter than the minimum pause.'),
+ 'result.padding': ('Знайдені паузи повністю перекриті запасом біля руху. Зменште запас у розширених параметрах.', 'Detected pauses are fully covered by motion padding. Reduce padding in Advanced Settings.'),
+ 'result.manual': ('Після ручних рішень усі ділянки залишаються без змін.', 'Manual decisions now keep every section unchanged.'),
+ 'result.constant': ('Відео містить постійні зміни — придатних пауз немає.', 'The video contains continuous changes; there are no eligible pauses.'),
+ 'result.empty': ('Усе відео визначене як пауза. Порожній MP4 не створюватиметься. Залиште потрібну ділянку вручну або змініть параметри.', 'The entire video is classified as idle. An empty MP4 will not be created. Manually keep a section or adjust settings.'),
+ 'result.stale': ('Параметри виявлення змінено. Показано попередній результат; перед переглядом і експортом повторіть аналіз.', 'Detection settings changed. This is the previous result; analyze again before previewing or exporting.'),
+ 'result.previous': ('Новий аналіз не завершено. Нижче — попередній коректний результат.', 'The new analysis did not finish. The previous valid result is shown below.'),
+ 'result.reset': ('Параметри пауз змінено: ручні правки скинуто до нового автоматичного плану.', 'Pause settings changed: manual edits were reset to the new automatic plan.'),
+ 'suggest.minimum': ('Зменшити мінімальну паузу', 'Reduce minimum pause'),
+ 'suggest.sensitivity': ('Знизити чутливість', 'Lower sensitivity'),
+ 'suggest.debounce': ('Посилити фільтрацію', 'Increase burst filtering'),
+ 'details': ('Деталі аналізу', 'Analysis Details'),
+ 'details.raw': ('Сирих нерухомих інтервалів: {value}', 'Raw still intervals: {value}'),
+ 'details.static': ('Інтервалів після стабілізації: {value}', 'Stabilized still intervals: {value}'),
+ 'details.longest': ('Найдовша пауза: {value}', 'Longest still interval: {value}'),
+ 'details.short': ('Відкинуто через мінімальну тривалість: {value}', 'Rejected by minimum length: {value}'),
+ 'details.padding': ('Повністю перекрито запасом: {value}', 'Fully covered by padding: {value}'),
+ 'details.bursts': ('Об’єднано коротких сплесків: {value}', 'Short bursts merged: {value}'),
+ 'details.remove': ('Фактичне вирізання: {value}', 'Actual removal: {value}'),
+ 'details.reason': ('Чому немає вирізань: {reason}', 'Why there are no cuts: {reason}'),
+ 'details.top': ('П’ять найдовших пауз після стабілізації', 'Five longest stabilized still intervals'),
+ 'details.graph': ('Інтенсивність змін у часі (відносна шкала)', 'Change intensity over time (relative scale)'),
+ 'details.none': ('Інтервалів немає.', 'No intervals.'),
+ 'legend': ('Зелений — залишити    Червоний — видалити    Жовтий — прискорити', 'Green — keep    Red — remove    Yellow — speed up'),
+ 'keep': ('Залишити', 'Keep'), 'remove': ('Видалити', 'Remove'), 'speed_up': ('Прискорити', 'Speed Up'),
+ 'segment.tip': ('{start} → {end}\nТривалість: {duration}\nДія: {action}', '{start} → {end}\nDuration: {duration}\nAction: {action}'),
+ 'segment.selected': ('Обрана ділянка: {start} → {end}', 'Selected section: {start} → {end}'),
+ 'manual': ('Ручне редагування · необов’язково', 'Manual Editing · optional'),
+ 'start': ('Початок', 'Start'), 'end': ('Кінець', 'End'), 'action': ('Дія', 'Action'),
+ 'apply': ('Застосувати межі', 'Apply boundaries'), 'reset.plan': ('Повернути автоматичний план', 'Reset automatic plan'),
+ 'discard.title': ('Відкрити інше відео?', 'Open another video?'),
+ 'discard': ('Скинути поточний монтажний план?', 'Discard the current editing plan?'),
+ 'unchanged.title': ('План не змінює відео', 'The plan does not change the video'),
+ 'unchanged.confirm': ('Жодна ділянка не вирізається й не прискорюється. Експортувати повне відео як є?', 'No section is removed or accelerated. Export the complete video unchanged?'),
+ 'export.title': ('Експорт MP4 · H.264', 'Export MP4 · H.264'), 'quality': ('Якість', 'Quality'),
+ 'quality.high': ('Висока · 18', 'High · 18'), 'quality.balanced': ('Збалансована · 23', 'Balanced · 23'), 'quality.small': ('Менший файл · 28', 'Small File · 28'),
+ 'audio': ('Звук', 'Audio'), 'audio.keep': ('Зберегти звук', 'Preserve Audio'), 'audio.mute': ('Без звуку', 'Mute Video'),
+ 'encoder': ('Кодування', 'Encoder'), 'encoder.cpu': ('Процесор · libx264', 'CPU · libx264'),
+ 'encoder.note': ('Апаратні варіанти потребують сумісної відеокарти й драйвера. Якість CQ/QP відрізняється від CRF. Звук прискорюється зі збереженням висоти тону.', 'Hardware options require a compatible GPU and driver. CQ/QP quality differs from CRF. Sped-up audio preserves pitch.'),
+ 'save': ('Зберегти', 'Save'), 'yes': ('Так', 'Yes'), 'no': ('Ні', 'No'),
+ 'eta.calibrating': ('Оцінюємо швидкість перших кадрів…', 'Measuring the first frames…'),
+ 'eta.remaining': ('Залишилось приблизно {remaining} · минуло {elapsed}', 'About {remaining} left · elapsed {elapsed}'),
+ 'eta.done': ('Аналіз завершено за {elapsed}', 'Analysis finished in {elapsed}'),
+ 'state.no_video': ('Відкрийте відео для початку', 'Open a video to begin'),
+ 'state.ready': ('Готово до аналізу', 'Ready to analyze'),
+ 'state.loading': ('Читаємо інформацію про відео', 'Reading video information'),
+ 'state.loading_cancelled': ('Відкриття відео скасовано', 'Opening video cancelled'),
+ 'state.loading_failed': ('Не вдалося відкрити відео', 'Unable to open video'),
+ 'state.analyzing': ('Аналізуємо рух і сталі зміни полотна', 'Analyzing movement and lasting canvas changes'),
+ 'state.analysis_complete': ('Аналіз завершено', 'Analysis complete'),
+ 'state.analysis_cancelled': ('Аналіз скасовано. Попередній коректний результат збережено, якщо він був.', 'Analysis cancelled. Any previous valid result is retained.'),
+ 'state.analysis_failed': ('Аналіз не завершено через помилку', 'Analysis failed'),
+ 'state.exporting': ('Експортуємо відео', 'Exporting video'),
+ 'state.export_complete': ('Відео збережено: {path}', 'Video saved: {path}'),
+ 'state.export_cancelled': ('Експорт скасовано; неповний файл прибрано', 'Export cancelled; incomplete output removed'),
+ 'state.export_failed': ('Експорт не завершено через помилку', 'Export failed'),
+ 'state.preview': ('Готуємо перегляд із поточного плану', 'Preparing a preview of the current plan'),
+ 'state.preview_complete': ('Перегляд готовий', 'Preview ready'),
+ 'state.preview_cancelled': ('Підготовку перегляду скасовано', 'Preview preparation cancelled'),
+ 'state.preview_failed': ('Не вдалося підготувати перегляд', 'Preview preparation failed'),
+ 'stage.analysis': ('Аналіз руху та коротких сплесків', 'Analyzing movement and short bursts'),
+ 'stage.analysis_complete': ('Кадри проаналізовано', 'Frame analysis complete'),
+ 'stage.encoding': ('Кодуємо ділянку {section} із {count}', 'Encoding section {section} of {count}'),
+ 'stage.finalizing': ('Об’єднуємо відео та звук', 'Combining video and audio'),
+ 'stage.export_complete': ('Файл створено', 'File created'),
+ 'privacy': ('Відео залишається на вашому комп’ютері. Оригінал не перезаписується.', 'Your video stays on your computer. The original is never overwritten.'),
+ 'error.title': ('Не вдалося виконати дію', 'Unable to complete the operation'),
+ 'error.settings': ('Перевірте параметри аналізу.', 'Invalid analysis settings'),
+ 'error.area': ('Область аналізу повинна бути всередині кадру.', 'Detection area must lie inside the video'),
+ 'error.draw_area': ('Спочатку виділіть полотно мишею на оригінальному відео.', 'Draw a detection rectangle on the original video first.'),
+ 'error.no_segments': ('Немає відеоділянок для обробки.', 'No video segments'),
+ 'error.plan': ('Межі ділянок створюють прогалину, перекриття або нульову тривалість.', 'The editing plan has a gap, overlap or invalid segment'),
+ 'error.coverage': ('План повинен покривати всю тривалість відео.', 'The editing plan must cover the entire video'),
+ 'error.original': ('Оригінальний файл не можна перезаписувати. Оберіть інше ім’я.', 'The original video can never be overwritten'),
+ 'error.exists': ('Такий вихідний файл уже існує. Оберіть нове ім’я.', 'Output already exists. Choose a new filename'),
+ 'error.mp4': ('Назва вихідного файлу повинна закінчуватися на .mp4.', 'The output filename must end in .mp4'),
+ 'error.encoder': ('Непідтримувані параметри кодування. Спробуйте процесорне кодування.', 'Unsupported export quality or encoder'),
+ 'error.empty': ('Не залишилося відео для експорту. Залиште потрібну ділянку вручну.', 'No output remains. Increase sensitivity or manually keep a section'),
+ 'error.tool': ('Не знайдено {tool}. У portable-версії перевірте папку tools поруч із EXE.', '{tool} not found. Check the tools folder beside the portable EXE.'),
+ 'error.start': ('Не вдалося запустити {tool}.', 'Cannot start {tool}.'),
+ 'error.ffmpeg': ('Обробка відео не завершилася. Перевірте доступне місце та параметри кодування.', 'Video processing failed. Check free space and encoding settings.'),
+ 'error.format': ('Оберіть MP4, MOV, MKV, WebM або AVI.', 'Choose MP4, MOV, MKV, WebM or AVI'),
+ 'error.video': ('Не вдалося прочитати відео. Файл може бути пошкоджений або мати непідтримуваний кодек.', 'Cannot read this video. It may be damaged or use an unsupported codec.'),
+ 'error.no_video': ('У файлі немає відеодоріжки.', 'This file has no video stream'),
+ 'error.duration': ('Не вдалося визначити коректну тривалість відео.', 'The video has no readable positive duration'),
+ 'error.probe_timeout': ('Читання інформації про відео перевищило час очікування.', 'Reading video metadata timed out'),
+ 'error.frame': ('Не вдалося декодувати повний кадр або часові позначки.', 'Incomplete decoded frame or missing source timestamps'),
+ 'error.frames': ('Відео не містить кадрів, які можна декодувати.', 'FFmpeg could not decode any video frames'),
+ 'error.file': ('Не вдалося прочитати або записати файл. Перевірте шлях, доступ і вільне місце.', 'Cannot read or write the file. Check its path, permissions and free space.'),
+ 'error.unexpected': ('Сталася непередбачена помилка. Технічні подробиці можна розгорнути нижче.', 'An unexpected error occurred. Expand the technical details below.'),
+}
+
+
+@dataclass(frozen=True)
+class Text:
+    key: str
+    params: dict = field(default_factory=dict)
+
+    def __str__(self):
+        return tr('en', self.key, **self.params)
+
+
+def tr(language, key, **params):
+    pair = CATALOG[key]
+    values = {k: tr(language, v.key, **v.params) if isinstance(v, Text) else v for k,v in params.items()}
+    return pair[0 if language == 'uk' else 1].format(**values)
+
+
+def install_qt_language(language):
+    """Translate standard file-browser/error-dialog controls with Qt's catalog."""
+    from PySide6.QtCore import QCoreApplication, QLibraryInfo, QTranslator
+    app = QCoreApplication.instance()
+    previous = getattr(app, '_smartcut_translator', None)
+    if previous:
+        app.removeTranslator(previous)
+        previous.deleteLater()
+    app._smartcut_translator = None
+    if language == 'uk':
+        translator = QTranslator(app)
+        if translator.load('qtbase_uk', QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
+            app.installTranslator(translator)
+            app._smartcut_translator = translator

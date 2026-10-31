@@ -6,11 +6,12 @@ from smartcut.app import Window, video_drop_path
 from smartcut.model import Segment
 from smartcut.video import Video
 from smartcut.progress import AnalysisEstimate
+from smartcut.state import State
 
 
 def test_drop_on_zone_and_player_and_reject_non_video():
     app = QApplication.instance() or QApplication([])
-    window = Window()
+    window = Window(language='uk', remember=False)
     window.show()
     received = []
     window.open_video = received.append
@@ -46,7 +47,7 @@ def test_drop_on_zone_and_player_and_reject_non_video():
 
 def test_raw_stats_stay_stable_when_manual_edit_keeps_idle():
     app = QApplication.instance() or QApplication([])
-    window = Window()
+    window = Window(language='uk', remember=False)
     window.video = Video(Path('/tmp/input.mp4'), 10, 320, 180, 24, 1, 'mp4', False)
     window.samples = [(0, 0, False), (1, 1, True), (2, 0, False), (10, 0, False)]
     window.plan = [Segment(0, 1), Segment(1, 10, 'remove')]
@@ -59,11 +60,14 @@ def test_raw_stats_stay_stable_when_manual_edit_keeps_idle():
     assert detected == (window.motion_value.text(), window.still_value.text())
     assert '00:00:10.00' in window.stats.text()
     window.analysis_estimate = AnalysisEstimate(started=0)
-    window.analysis_state = 'running'
+    generation = window.workflow.begin('analysis')
     for value in (.1, .2, .3): window.analysis_estimate.update(value)
-    window.update_analysis_eta()
-    assert 'Приблизно залишилось' in window.eta_label.text()
-    window.operation_cancelled()
-    assert 'скасовано' in window.eta_label.text()
+    window.workflow.update(generation, .3)
+    window.render_operation()
+    assert 'Залишилось приблизно' in window.eta_label.text()
+    window.operation_cancelled(generation)
+    assert window.workflow.state == State.ANALYSIS_CANCELLED
+    assert 'скасовано' in window.phase_label.text()
+    assert not window.eta_label.text() and window.progress.value() == 0
     window.close()
     app.processEvents()

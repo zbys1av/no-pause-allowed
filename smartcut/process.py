@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from .errors import AppError
 
 
 _spawn_lock = threading.Lock()
@@ -57,7 +58,7 @@ def tool(name):
     for option in options:
         if option and Path(option).is_file():
             return str(option)
-    raise RuntimeError(f"{name} not found. Install FFmpeg and FFprobe, put them in tools/, or set {variable}.")
+    raise AppError("error.tool", tool=name)
 
 
 @contextmanager
@@ -67,7 +68,7 @@ def child(args, job, **kwargs):
         process = spawn(args, stdin=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0, **kwargs)
     except OSError as exc:
-        raise RuntimeError(f"Cannot start {Path(args[0]).name}: {exc}") from exc
+        raise AppError("error.start", str(exc), tool=Path(args[0]).name) from exc
     stopped = threading.Event()
 
     def watch():
@@ -134,5 +135,5 @@ def run(args, job, duration=0, progress=lambda *_: None, stage="Processing"):
                 errors.seek(0, os.SEEK_END)
                 errors.seek(max(0, errors.tell()-16000))
                 tail = errors.read().decode(errors="replace").splitlines()[-40:]
-            raise RuntimeError(f"{stage} failed. " + "\n".join(tail))
+            raise AppError("error.ffmpeg", str(stage)+"\n"+"\n".join(tail))
     progress(1., stage)

@@ -60,7 +60,19 @@ def check(report_path):
                 raise RuntimeError("Packaged export has incorrect duration or missing audio")
             app = QApplication.instance() or QApplication([])
             app.setStyleSheet(STYLE)
-            window = Window()
+            window = Window(language='uk', remember=False)
+            from .icons import icon
+            from . import __version__
+            if icon('folder-open').isNull():
+                raise RuntimeError('The portable bundle has no SVG icons')
+            if window.advanced.toggle.isChecked() or window.manual.toggle.isChecked():
+                raise RuntimeError('Advanced/manual controls should start collapsed')
+            if window.analyze_button.text() != 'Аналізувати відео':
+                raise RuntimeError('Default Ukrainian UI is unavailable')
+            window.set_language('en')
+            if window.analyze_button.text() != 'Analyze Video':
+                raise RuntimeError('English UI is unavailable')
+            window.set_language('uk')
             # A CI machine has no physical speakers. Video decoding is checked
             # here; encoded audio is checked above and by the tone-marker suite.
             window.player.setAudioOutput(None)
@@ -84,7 +96,8 @@ def check(report_path):
             if not any(valid_frames):
                 raise RuntimeError("The packaged Qt player did not decode a video frame: " + player_error)
             report.update(ok=True, analysis_samples=len(samples), output_duration=output.duration,
-                          audio=True, decoded_video_frame=True)
+                          audio=True, decoded_video_frame=True, version=__version__,
+                          localized_ui=True, svg_icons=True, simple_mode=True)
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

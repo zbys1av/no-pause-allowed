@@ -19,7 +19,7 @@ $env:SMARTCUT_FFPROBE = Join-Path (Get-Location) 'tools\ffprobe.exe'
 & $Python -m pytest -q
 if ($LASTEXITCODE -ne 0) { throw 'Tests failed; package not created.' }
 if (Test-Path 'dist\SmartVideoCutter') { Remove-Item 'dist\SmartVideoCutter' -Recurse -Force }
-& $Python -m PyInstaller --noconfirm --clean --windowed --onedir --name SmartVideoCutter --paths . scripts/windows_entry.py
+& $Python -m PyInstaller --noconfirm --clean --windowed --onedir --name SmartVideoCutter --paths . --collect-data smartcut scripts/windows_entry.py
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
 Copy-Item tools dist\SmartVideoCutter\tools -Recurse -Force
 Copy-Item PORTABLE-README.txt,THIRD_PARTY.md dist\SmartVideoCutter -Force

@@ -6,3 +6,5 @@ build/
 dist/
 *.spec
 tools/
+.smartcut-preferences.json
+.smartcut-preferences.tmp

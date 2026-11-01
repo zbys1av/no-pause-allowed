@@ -30,14 +30,17 @@ class AdaptiveAnalysis:
         if len(self.stats['step_events'])<500:self.stats['step_events'].append(event)
         else:self.stats['step_events_dropped']+=1
 
-    def certified(self, frame):
+    def certified(self, frame, pair=None):
         previous=self.tracker.previous
-        if np.array_equal(frame,previous):
+        if pair is not None and (pair[0]!=0 or pair[1]):return None
+        if getattr(pair,'quiet','')=='exact' or (pair is None and np.array_equal(frame,previous)):
             # Invariant: the preceding frame was already checked against its
             # anchor, or became the anchor itself. Identical pixels add no ink.
             return 'exact'
         if self.scratch is None:self.scratch=np.empty(frame.shape,np.int16)
-        for reference in (previous,self.tracker.anchor):
+        references=(self.tracker.anchor,) if pair is not None else (previous,self.tracker.anchor)
+        if pair is not None and previous is self.tracker.anchor:return 'bounded'
+        for reference in references:
             if reference is None:return None
             np.subtract(frame,reference,out=self.scratch,dtype=np.int16)
             if self.scratch.min() < -self.bound or self.scratch.max() > self.bound:return None
@@ -48,9 +51,9 @@ class AdaptiveAnalysis:
         # both pair and anchor scores are zero, rather than estimating stillness.
         return 'bounded'
 
-    def full(self, timestamp, frame):
+    def full(self, timestamp, frame, pair=None):
         burst_begin=self.tracker.burst_start
-        start=time.perf_counter();self.tracker.add(timestamp,frame)
+        start=time.perf_counter();self.tracker.add(timestamp,frame,pair=pair)
         self.stats['full_seconds']+=time.perf_counter()-start
         self.stats['full_checks']+=1
         if self.last_full is not None:self.stats['max_full_gap_s']=max(self.stats['max_full_gap_s'],timestamp-self.last_full)
@@ -69,15 +72,15 @@ class AdaptiveAnalysis:
             if self.enabled and self.quiet_audits>=4:
                 self.set_step(self.step*2,timestamp,'four_quiet_audits');self.quiet_audits=0
 
-    def add(self, timestamp, frame):
+    def add(self, timestamp, frame, pair=None):
         self.stats['frames']+=1
         delta=timestamp-self.last_time if self.last_time is not None else 0.
         self.last_time=timestamp
         audit=(self.last_full is None or self.since_audit+1>=self.step
                or timestamp-self.last_full+delta>self.max_span+1e-8)
         if not self.enabled or self.step==1 or audit or self.tracker.burst_start is not None:
-            self.full(timestamp,frame);return
-        start=time.perf_counter();proof=self.certified(frame)
+            self.full(timestamp,frame,pair);return
+        start=time.perf_counter();proof=self.certified(frame,pair)
         self.stats['guard_seconds']+=time.perf_counter()-start
         self.stats['guard_checks']+=1
         if proof:
@@ -89,4 +92,4 @@ class AdaptiveAnalysis:
             self.stats['refinements']+=1;self.quiet_audits=0
             self.resume_step=max(self.resume_step,self.step)
             self.set_step(1,timestamp,'possible_change_refine_at_base_resolution')
-            self.full(timestamp,frame)
+            self.full(timestamp,frame,pair)

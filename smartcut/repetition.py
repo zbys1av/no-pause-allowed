@@ -24,6 +24,7 @@ class LocalCycles:
     def __init__(self, background_compare=None):
         self.locations = OrderedDict()
         self.backgrounds = {}
+        self.background_indices = {}
         self.background_compare = background_compare
         self.invalidated = []
 
@@ -43,12 +44,15 @@ class LocalCycles:
         history=self.locations.setdefault(key,deque(maxlen=9))
         self.locations.move_to_end(key)
         while len(self.locations)>8:
-            removed,_=self.locations.popitem(last=False);self.backgrounds.pop(removed,None)
+            removed,_=self.locations.popitem(last=False);self.backgrounds.pop(removed,None);self.background_indices.pop(removed,None)
         anchor=self.backgrounds.get(key)
         if anchor is not None and self.background_compare is not None:
-            if not self.background_compare(anchor,before,key) or not self.background_compare(anchor,after,key):
+            before_ok=self.background_compare(anchor,before,key,begin-1)
+            anchor=self.backgrounds.get(key,anchor)
+            if not before_ok or not self.background_compare(anchor,after,key,stop):
                 self.invalidated=list(history);history.clear();anchor=None
-        if anchor is None:self.backgrounds[key]=before
+        if anchor is None:
+            self.backgrounds[key]=before;self.background_indices[key]=begin-1
         history.append(CycleEvent(start,end,begin,stop,before[top:bottom,left:right].copy(),after[top:bottom,left:right].copy()))
         events=list(history)
         for lag in (1,2,3):

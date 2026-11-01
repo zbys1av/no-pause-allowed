@@ -28,7 +28,7 @@ class Journal:
 
 
 REASONS = {
-    'certified_quiet': 'All RGB pixels certified below the detector thresholds against both the previous frame and the idle anchor; full audit safely skipped.',
+    'certified_quiet': 'Previous-pair evidence and the checked idle anchor certify the same zero-score inactive sample; ordered tracker work safely skipped.',
     'merged_transient': 'Short interior cursor/return burst confirmed by pixels; merged by debounce.',
     'repeated_local_cycle': 'At least three matching repetitions of small local before/after pixel states at a regular cadence; treated as an interface animation, not accumulating ink.',
     'background_changed': 'Scene changed outside the repeating patch; earlier burst classification revoked to protect drawing.',

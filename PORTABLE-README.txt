@@ -1,4 +1,4 @@
-Smart Video Cutter 1.5 — Windows 10/11 x64 Portable
+Smart Video Cutter 1.6 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -42,3 +42,8 @@ Adaptive analysis is enabled by default. Every base sample is still checked;
 full audits become less frequent after confirmed stillness. Any possible change
 restores base precision. Advanced Settings can disable it for comparison.
 Analysis Details and diagnostic reports show full-check / fast-guard counts.
+
+Advanced > Performance > Parallel Analysis: Auto / 1 / 2 / 4 / 8.
+One decoder supplies bounded pair workers; temporal decisions stay ordered.
+Auto leaves short/trivial work serial and enables threads for costly checks.
+Recorded scene changes no longer revoke older confirmed blinks unnecessarily.

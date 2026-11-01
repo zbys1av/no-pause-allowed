@@ -78,6 +78,13 @@ def check(report_path):
             if any(s.action=='keep' for s in analyze_plan(tracker.samples,18,settings).plan):
                 raise RuntimeError('Packaged detector kept the idle blinking tail')
             samples = analyze(video, settings, Job())
+            from dataclasses import replace
+            parallel_job=Job()
+            parallel_samples=analyze(video,replace(settings,workers=2),parallel_job)
+            if [key(s) for s in samples]!=[key(s) for s in parallel_samples]:
+                raise RuntimeError('Packaged parallel analysis differs from serial results')
+            if parallel_job.debug_analysis_performance['effective_workers']!=2:
+                raise RuntimeError('Packaged parallel workers did not run')
             plan = make_plan(samples, video.duration, settings)
             target = directory / "edited output.mp4"
             export(video, plan, target, Job())
@@ -132,7 +139,7 @@ def check(report_path):
             report.update(ok=True, analysis_samples=len(samples), output_duration=output.duration,
                           audio=True, decoded_video_frame=True, version=__version__,
                           localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True, local_cycles=True,
-                          adaptive_analysis=True,adaptive_certified_quiet=adaptive.stats['certified_quiet'])
+                          adaptive_analysis=True,adaptive_certified_quiet=adaptive.stats['certified_quiet'],parallel_analysis=True)
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

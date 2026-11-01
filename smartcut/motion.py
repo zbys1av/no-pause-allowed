@@ -1,5 +1,6 @@
 """Streaming RGB analysis with sparse-motion and gradual-stroke protection."""
-from collections import deque
+from collections import deque, OrderedDict
+from typing import NamedTuple
 import queue
 import re
 import subprocess
@@ -14,20 +15,25 @@ from .i18n import Text
 from dataclasses import replace
 from .repetition import LocalCycles
 from .adaptive import AdaptiveAnalysis
+from .parallel import PairPipeline,choose_workers
 
 
-def change_masks(previous, current, sensitivity):
+def change_masks(previous, current, sensitivity, difference=None):
     # Compare color too: two different brush colors can have the same luminance.
-    difference = current.astype(np.int16) - previous.astype(np.int16)
+    difference = np.subtract(current,previous,dtype=np.int16) if difference is None else difference
     offset = np.median(difference[::4, ::4], axis=(0, 1))
     # Compensate only tiny capture jitter, never erase a real canvas fill/change.
     if np.all(np.abs(offset) <= 2):
         difference -= np.asarray(offset, dtype=np.int16)
     pixel_threshold = max(4., 16 - sensitivity * .12)
     if difference.ndim == 3:
-        luminance = np.abs(np.einsum('...c,c->...', difference,
-                          np.array([77, 150, 29], dtype=np.int32), dtype=np.int32))
-        magnitude = np.abs(difference).max(axis=2)
+        luminance=np.multiply(difference[:,:,0],77,dtype=np.int32)
+        luminance+=np.multiply(difference[:,:,1],150,dtype=np.int32)
+        luminance+=np.multiply(difference[:,:,2],29,dtype=np.int32)
+        np.abs(luminance,out=luminance)
+        # Three channel-wise ufuncs avoid a tiny reduction for every RGB pixel.
+        # Integer operations and thresholds are identical to abs(delta).max(2).
+        magnitude = np.maximum(np.maximum(np.abs(difference[:,:,0]),np.abs(difference[:,:,1])),np.abs(difference[:,:,2]))
         # Chroma noise grows when YUV420 is expanded to RGB. Use a higher
         # chromatic floor while retaining the lower luma floor for pencil lines.
         changed = (luminance > pixel_threshold*256) | (magnitude > pixel_threshold*3)
@@ -57,9 +63,39 @@ def significant_pixels(changed, strong_mask, sensitivity):
 
 
 def motion_score(previous, current, sensitivity):
-    _, changed, strong_mask = change_masks(previous, current, sensitivity)
-    score,moving,_=significant_pixels(changed,strong_mask,sensitivity)
-    return score,moving
+    pair=prepare_pair(previous,current,sensitivity,details=False)
+    return pair.score,pair.moving
+
+
+class PairEvidence(NamedTuple):
+    score: float
+    moving: bool
+    bounds: tuple | None
+    pixels: tuple
+    bitmap: bytes | None = None
+    quiet: str = ''
+
+
+def prepare_pair(previous, frame, sensitivity, details=True):
+    """Pure adjacent-frame work; may run ahead, without temporal state."""
+    if previous is None:return None
+    if np.array_equal(previous,frame):return PairEvidence(0.,False,None,(),None,'exact')
+    delta=np.subtract(frame,previous,dtype=np.int16)
+    bound=math.floor(max(4.,16-sensitivity*.12)-2)
+    probe=delta[::16,::16]
+    # A sparse probe can only reject this proof. Acceptance checks every pixel.
+    if probe.min()>=-bound and probe.max()<=bound and delta.min()>=-bound and delta.max()<=bound:
+        return PairEvidence(0.,False,None,(),None,'bounded')
+    _,changed,strong=change_masks(previous,frame,sensitivity,difference=delta)
+    score,moving,pixels=significant_pixels(changed,strong,sensitivity)
+    bounds=None;points=()
+    if details and moving and np.count_nonzero(pixels)<=64:
+        ys,xs=np.nonzero(pixels)
+        if len(xs) and xs.max()-xs.min()<32 and ys.max()-ys.min()<32:
+            bounds=(int(xs.min()),int(ys.min()),int(xs.max()+1),int(ys.max()+1))
+            points=tuple(zip(xs.tolist(),ys.tolist()))
+    bitmap=np.packbits(pixels).tobytes() if details and moving and not points else None
+    return PairEvidence(score,moving,bounds,points,bitmap)
 
 
 def cursor_or_return(before, after, sensitivity):
@@ -109,12 +145,50 @@ class MotionTracker:
         self.cycles = LocalCycles(self.same_background)
         self.burst_bounds = None
         self.burst_cycle_candidate = False
+        self.observed_pixels=OrderedDict()
+        self.observed_masks=OrderedDict()
+        self.cycle_stats=dict(background_checks=0,unexplained_changes=0,explained_changes=0,events=[])
 
-    def same_background(self, before, after, region):
+    def same_background(self, before, after, region, after_index=None):
         _,changed,strong=change_masks(before,after,self.sensitivity)
         left,top,right,bottom=region
         changed[top:bottom,left:right]=False;strong[top:bottom,left:right]=False
-        _,moving,_=significant_pixels(changed,strong,self.sensitivity)
+        _,moving,pixels=significant_pixels(changed,strong,self.sensitivity)
+        self.cycle_stats['background_checks']+=1
+        if moving:
+            # A later, already recorded scene event must not turn the preceding
+            # 18 seconds of a proved clock blink back into user activity.
+            # Require exact sparse pixel coverage, not merely nearby rectangles.
+            history=self.cycles.locations.get(region,())
+            first=history[0].begin if history else len(self.samples)
+            first=max(first,self.cycles.background_indices.get(region,-1)+1)
+            clock={i for event in history for i in range(event.begin,event.stop)}
+            seen=set()
+            for i,points in self.observed_pixels.items():
+                if i<first or i in clock:continue
+                sample=self.samples[i]
+                if sample.active and sample.persistent and not sample.transient and sample.evidence!='accumulated_change':seen.update(points)
+            target=np.packbits(pixels)
+            covered=np.zeros_like(target)
+            if seen:
+                indices=np.fromiter((y*pixels.shape[1]+x for x,y in seen),dtype=np.int64)
+                np.bitwise_or.at(covered,indices//8,(1<<(7-indices%8)).astype(np.uint8))
+            for i,bitmap in self.observed_masks.items():
+                if i<first or i in clock:continue
+                sample=self.samples[i]
+                if sample.active and sample.persistent and not sample.transient and sample.evidence!='accumulated_change':
+                    np.bitwise_or(covered,np.frombuffer(bitmap,np.uint8),out=covered)
+            explained=not np.any(target & ~covered)
+            self.cycle_stats['explained_changes' if explained else 'unexplained_changes']+=1
+            if len(self.cycle_stats['events'])<128:
+                self.cycle_stats['events'].append(dict(time_s=self.samples[-1].time if self.samples else 0,
+                    reason='scene_event_already_recorded' if explained else 'unexplained_background_change',region=region))
+            if explained:
+                # Advance the baseline past the recorded event. Otherwise its
+                # pixels would look unexplained when it leaves the history.
+                self.cycles.backgrounds[region]=after
+                self.cycles.background_indices[region]=len(self.samples) if after_index is None else after_index
+                return True
         return not moving
 
     def add_certified_quiet(self, timestamp, frame):
@@ -124,18 +198,19 @@ class MotionTracker:
         self.samples.append(MotionSample(timestamp,0.,False,evidence='certified_quiet'))
         self.previous=frame
 
-    def add(self, timestamp, frame):
+    def add(self, timestamp, frame, pair=None):
         if self.previous is None:
             self.samples.append(MotionSample(timestamp, 0., False))
             self.previous = self.anchor = frame
             return
-        _, changed, strong = change_masks(self.previous,frame,self.sensitivity)
-        score, moving, pixels = significant_pixels(changed,strong,self.sensitivity)
-        bounds=None
-        if moving and np.count_nonzero(pixels)<=64:
-            ys,xs=np.nonzero(pixels)
-            if len(xs) and xs.max()-xs.min()<32 and ys.max()-ys.min()<32:
-                bounds=(int(xs.min()),int(ys.min()),int(xs.max()+1),int(ys.max()+1))
+        pair=pair if pair is not None else prepare_pair(self.previous,frame,self.sensitivity)
+        score,moving,bounds=pair[:3]
+        if moving and len(pair)>3 and pair[3]:
+            self.observed_pixels[len(self.samples)]=pair[3]
+            while len(self.observed_pixels)>512:self.observed_pixels.popitem(last=False)
+        if moving and len(pair)>4 and pair[4] is not None:
+            self.observed_masks[len(self.samples)]=pair[4]
+            while len(self.observed_masks)>32:self.observed_masks.popitem(last=False)
         accumulated = False
         if not moving:
             anchor_score, accumulated = motion_score(self.anchor, frame, self.sensitivity)
@@ -190,11 +265,13 @@ def analyze(video, settings, job, progress=lambda *_: None):
     settings.validate()
     x, y, w, h = settings.area
     width, height = analysis_dimensions(video, settings)
+    workers,selection=choose_workers(settings.workers,video.duration,width*height)
+    decoder_threads='1' if settings.workers>1 else '2'
     crop = f"crop=w=iw*{w}:h=ih*{h}:x=iw*{x}:y=ih*{y},"
     filters = ("setpts=PTS-STARTPTS,select='isnan(prev_selected_t)+gte(t-prev_selected_t,"
                f"{1/settings.sample_fps-1e-6})'," + crop +
                f"scale={width}:{height}:flags=area,format=rgb24,showinfo")
-    args = [tool("ffmpeg"), "-hide_banner", "-nostdin", "-filter_threads", "2", "-threads", "2", "-i", str(video.path),
+    args = [tool("ffmpeg"), "-hide_banner", "-nostdin", "-filter_threads", '1', "-threads", decoder_threads, "-i", str(video.path),
             "-map", "0:v:0", "-an", "-sn", "-vf", filters, "-fps_mode", "vfr",
             "-threads", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
     timestamps = queue.Queue()
@@ -203,6 +280,10 @@ def analyze(video, settings, job, progress=lambda *_: None):
     engine = AdaptiveAnalysis(tracker,settings,video.fps)
     job.debug_samples = tracker.samples
     job.debug_analysis_performance = engine.stats
+    engine.stats['cycles']=tracker.cycle_stats
+    engine.stats.update(requested_workers=settings.workers,effective_workers=1 if settings.workers==0 else workers,worker_selection=selection,
+                        decoder_threads=int(decoder_threads),pixel_kernel='rgb-channel-v2',
+                        strategy='one_decoder_parallel_adjacent_pairs_ordered_temporal_state')
     analysis_started=time.perf_counter()
     frame_bytes = width*height*3
     last_progress = -math.inf
@@ -219,23 +300,26 @@ def analyze(video, settings, job, progress=lambda *_: None):
             timestamps.put(None)
         reader = threading.Thread(target=read_log, daemon=True)
         reader.start()
-        while True:
-            # BufferedReader.read fills the requested size unless EOF.
-            raw = p.stdout.read(frame_bytes)
-            if not raw:
-                break
-            job.check()
-            if len(raw) != frame_bytes:
-                raise AppError("error.frame")
-            timestamp = timestamps.get(timeout=30)
-            if timestamp is None:
-                raise AppError("error.frame")
-            current = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 3)
-            engine.add(timestamp, current)
-            now = time.monotonic()
-            if now-last_progress >= .08:
-                progress(min(.999, timestamp/video.duration), Text("stage.analysis"))
-                last_progress = now
+        def decoded():
+            previous_time=-math.inf
+            while True:
+                raw=p.stdout.read(frame_bytes)
+                if not raw:break
+                job.check()
+                if len(raw)!=frame_bytes:raise AppError('error.frame')
+                timestamp=timestamps.get(timeout=30)
+                if timestamp is None or timestamp<=previous_time:raise AppError('error.frame')
+                previous_time=timestamp
+                yield timestamp,np.frombuffer(raw,np.uint8).reshape(height,width,3)
+        with PairPipeline(workers,lambda a,b:prepare_pair(a,b,settings.sensitivity),job,auto=settings.workers==0) as pipeline:
+            engine.stats['parallel']=pipeline.stats
+            for timestamp,current,pair in pipeline.frames(decoded()):
+                engine.stats['effective_workers']=pipeline.stats['max_workers_used']
+                engine.add(timestamp,current,pair=pair)
+                now=time.monotonic()
+                if now-last_progress>=.08:
+                    progress(min(.995,timestamp/video.duration*.995),Text('stage.analysis'))
+                    last_progress=now
         code = p.wait()
         reader.join()
         job.check()
@@ -243,6 +327,11 @@ def analyze(video, settings, job, progress=lambda *_: None):
             raise AppError("error.video", "\n".join(errors))
     if not tracker.samples:
         raise AppError("error.frames")
+    progress(.999,Text('stage.validate_analysis'))
+    from .model import analyze_plan
+    analyze_plan(tracker.samples,video.duration,settings)
+    job.check()
+    engine.stats['validated_samples']=len(tracker.samples)
     progress(1., Text("stage.analysis_complete"))
     engine.stats['elapsed_s']=time.perf_counter()-analysis_started
     return tracker.samples

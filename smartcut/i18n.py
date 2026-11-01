@@ -2,6 +2,12 @@
 from dataclasses import dataclass, field
 
 CATALOG = {
+ 'performance': ('Продуктивність', 'Performance'),
+ 'workers': ('Паралельний аналіз', 'Parallel Analysis'),
+ 'workers.auto': ('Авто', 'Auto'),
+ 'workers.help': ('Кілька потоків прискорюють перевірку довгих відео. Авто враховує процесор, тривалість, роздільність і доступну пам’ять. На коротких відео обирає один потік.', 'Multiple threads accelerate checks on long videos. Auto considers CPU, duration, resolution and available memory. Short videos use one worker.'),
+ 'details.parallel': ('Потоків перевірки: {count}', 'Analysis workers: {count}'),
+ 'stage.validate_analysis': ('Об’єднуємо та перевіряємо результати аналізу', 'Merging and validating analysis results'),
  'enabled': ('Увімкнено', 'Enabled'), 'disabled': ('Вимкнено', 'Disabled'),
  'adaptive': ('Адаптивний аналіз', 'Adaptive analysis'),
  'adaptive.help': ('На нерухомих ділянках повна перевірка виконується рідше. Проміжні кадри перевіряються швидким захистом; можлива зміна одразу повертає базовий крок. Вимкніть для порівняння зі звичайним аналізом.', 'Runs full checks less often in still sections. Every intervening sample passes a fast safety check; any possible change immediately restores the base step. Disable to compare with fixed analysis.'),

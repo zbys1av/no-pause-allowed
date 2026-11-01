@@ -157,15 +157,18 @@ class Window(QMainWindow):
         self.advanced=Fold('advanced');settings_layout.addWidget(self.advanced)
         self.padding=self.spin(0,2,.6);self.debounce=self.spin(0,2,.3);self.frequency=self.spin(1,12,8,1)
         self.adaptive=QCheckBox();self.bindings.append((self.adaptive,'setText','enabled'))
+        self.parallel=QComboBox();self.parallel.addItems([self.t('workers.auto'),'1','2','4','8'])
         self.detail=QComboBox();self.detail.addItems(['320 px','640 px','960 px','1280 px']);self.detection=QComboBox();self.speed=QComboBox();self.speed.addItems(['2×','5×','10×','20×']);self.speed.setCurrentIndex(1)
         for key,widget,reset in (
             ('padding',self.padding,lambda:self.padding.setValue(self.defaults().padding)),
             ('debounce',self.debounce,lambda:self.debounce.setValue(self.defaults().debounce)),
             ('fps',self.frequency,lambda:self.frequency.setValue(self.defaults().sample_fps)),
-            ('adaptive',self.adaptive,lambda:self.adaptive.setChecked(self.defaults().adaptive)),
             ('detail',self.detail,lambda:self.detail.setCurrentIndex((320,640,960,1280).index(self.defaults().analysis_width))),
             ('area',self.detection,lambda:self.reset_area()),('speed',self.speed,lambda:self.speed.setCurrentIndex(1))):self.add_setting(self.advanced.content,key,widget,reset)
         self.area_label=QLabel();self.area_label.setWordWrap(True);self.advanced.content.addWidget(self.area_label)
+        self.advanced.content.addWidget(self.text('performance','sectionTitle'))
+        self.add_setting(self.advanced.content,'adaptive',self.adaptive,lambda:self.adaptive.setChecked(self.defaults().adaptive))
+        self.add_setting(self.advanced.content,'workers',self.parallel,lambda:self.parallel.setCurrentIndex(0))
         settings_layout.addStretch();self.settings_scroll.setWidget(settings);side.addWidget(self.settings_scroll,1)
         self.analyze_button=self.button('analyze',self.start_analysis,'activity',True);side.addWidget(self.analyze_button);side.addWidget(self.text('privacy','muted'))
         self.splitter.addWidget(self.sidebar);self.splitter.setSizes([900,340])
@@ -175,6 +178,7 @@ class Window(QMainWindow):
         self.sensitivity_label=self.rows['sensitivity'].name
         self.profile.currentIndexChanged.connect(self.apply_profile)
         self.adaptive.toggled.connect(self.analysis_changed)
+        self.parallel.currentIndexChanged.connect(self.analysis_changed)
         for widget in (self.sensitivity,self.frequency,self.detail):
             (widget.valueChanged if hasattr(widget,'valueChanged') else widget.currentIndexChanged).connect(self.analysis_changed)
         for widget in (self.minimum,self.padding,self.debounce):widget.valueChanged.connect(self.temporal_changed)
@@ -188,12 +192,12 @@ class Window(QMainWindow):
 
     def settings(self):
         return Settings(self.sensitivity.value(),self.minimum.value(),self.padding.value(),self.frequency.value(),self.area,
-                        (320,640,960,1280)[self.detail.currentIndex()],self.debounce.value(),self.adaptive.isChecked())
+                        (320,640,960,1280)[self.detail.currentIndex()],self.debounce.value(),self.adaptive.isChecked(),(0,1,2,4,8)[self.parallel.currentIndex()])
 
     def speed_value(self):return (2,5,10,20)[self.speed.currentIndex()]
 
     @staticmethod
-    def signature(settings,area_mode):return (settings.sensitivity,settings.sample_fps,settings.analysis_width,settings.area,area_mode,settings.adaptive)
+    def signature(settings,area_mode):return (settings.sensitivity,settings.sample_fps,settings.analysis_width,settings.area,area_mode,settings.adaptive,settings.workers)
 
     def apply_profile(self,index):
         if self.worker:return
@@ -201,6 +205,7 @@ class Window(QMainWindow):
         self.sensitivity.setValue(int(settings.sensitivity));self.minimum.setValue(settings.min_idle);self.padding.setValue(settings.padding)
         self.debounce.setValue(settings.debounce);self.frequency.setValue(settings.sample_fps);self.detail.setCurrentIndex((320,640,960,1280).index(settings.analysis_width))
         self.adaptive.setChecked(settings.adaptive)
+        self.parallel.setCurrentIndex(0)
         self.mode.setCurrentIndex(0);self.speed.setCurrentIndex(1)
         self.area=(0,0,1,1);self.detection.setCurrentIndex(0);self.view.outline.hide();self._updating=False
         self.update_defaults();self.analysis_changed()
@@ -209,7 +214,7 @@ class Window(QMainWindow):
         d=self.defaults()
         for key,value in {'sensitivity':f'{d.sensitivity:g}%', 'minimum':f'{d.min_idle:g} '+self.t('unit.seconds'), 'mode':Text('mode.remove'),
             'padding':f'{d.padding:g} '+self.t('unit.seconds'),'debounce':f'{d.debounce:g} '+self.t('unit.seconds'),'fps':f'{d.sample_fps:g}','detail':f'{d.analysis_width} px',
-            'area':Text('area.full'),'speed':'5×','adaptive':Text('enabled' if d.adaptive else 'disabled')}.items():self.rows[key].default=value;self.rows[key].translate(self.language)
+            'area':Text('area.full'),'speed':'5×','adaptive':Text('enabled' if d.adaptive else 'disabled'),'workers':Text('workers.auto')}.items():self.rows[key].default=value;self.rows[key].translate(self.language)
 
     def analysis_changed(self,*_):
         if self._updating:return
@@ -253,6 +258,7 @@ class Window(QMainWindow):
 
     def retranslate(self):
         install_qt_language(self.language)
+        self.parallel.setItemText(0,self.t('workers.auto'))
         for widget,method,key in self.bindings:getattr(widget,method)(self.t(key))
         for combo,keys in ((self.profile,('profile.drawing','profile.screen','profile.general')),
             (self.mode,('mode.remove','mode.speed')),(self.detection,('area.full','area.custom')),
@@ -433,6 +439,7 @@ class Window(QMainWindow):
             if performance.get('frames') and self.last_analysis_debug.get('state')==State.ANALYSIS_COMPLETE.value:
                 self.details_text.setText(self.details_text.text()+'\n'+self.t('details.performance',
                     full=performance['full_checks'],total=performance['frames'],fast=performance['certified_quiet']))
+                self.details_text.setText(self.details_text.text()+'\n'+self.t('details.parallel',count=performance.get('effective_workers',1)))
             top='\n'.join(f'{clock(a)} → {clock(b)} · {clock(b-a)}' for a,b in report.top_five)
             self.top_pauses.setText(self.t('details.top')+'\n'+(top or self.t('details.none')))
 

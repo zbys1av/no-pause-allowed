@@ -14,12 +14,13 @@ class Settings:
     analysis_width: int = 960
     debounce: float = .3
     adaptive: bool = True
+    workers: int = 0
 
     def validate(self):
         if not (0 <= self.sensitivity <= 100 and .5 <= self.min_idle <= 10
                 and 0 <= self.padding <= 2 and 1 <= self.sample_fps <= 12
                 and self.analysis_width in (320, 640, 960, 1280) and 0 <= self.debounce <= 2
-                and isinstance(self.adaptive,bool)):
+                and isinstance(self.adaptive,bool) and type(self.workers) is int and self.workers in (0,1,2,4,8)):
             raise AppError("error.settings")
         x, y, w, h = self.area
         if not all(isfinite(v) for v in self.area) or not (

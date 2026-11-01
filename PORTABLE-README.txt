@@ -1,5 +1,14 @@
 Smart Video Cutter 1.8 — Windows 10/11 x64 Portable
 
+Downloads and release status:
+https://github.com/zbys1av/no-pause-allowed#завантаження-portable-версії-для-windows-1011-x64
+Release page (available after the first successful release):
+https://github.com/zbys1av/no-pause-allowed/releases/latest
+Release ZIP (returns 404 until a release is published):
+https://github.com/zbys1av/no-pause-allowed/releases/latest/download/SmartVideoCutter-Windows-x64-portable.zip
+Choose the portable ZIP asset, not "Source code (zip)" or "Code > Download ZIP".
+The archived portable-windows download is an older build without multi-video support.
+
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
 3. Double-click SmartVideoCutter.exe.

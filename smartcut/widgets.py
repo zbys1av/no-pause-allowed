@@ -1,11 +1,11 @@
 """Reusable Qt views; all editing policy lives in model/controller modules."""
-from bisect import bisect_right
+from bisect import bisect_right,bisect_left
 from math import log1p
-from PySide6.QtCore import Qt, Signal, QObject, QEvent, QTimer, QRectF, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, Signal, QObject, QEvent, QTimer, QRectF, QAbstractTableModel
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPainterPath
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (QWidget,QGraphicsView,QGraphicsScene,QGraphicsRectItem,
-    QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QToolButton,QFrame,QToolTip,QGraphicsOpacityEffect)
+    QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QToolButton,QFrame,QToolTip)
 from pathlib import Path
 from .i18n import tr,Text
 from .icons import icon
@@ -23,6 +23,17 @@ def review_tip(language,spans,start,end):
     reasons=sorted({r for s in overlaps for r in s.reasons})
     return tr(language,'review.tip',time=clock(sum(s.end-s.start for s in overlaps)),
               duration=clock(end-start),reasons='; '.join(tr(language,'review.'+r) for r in reasons))
+
+
+def video_drop_paths(mime):
+    if not mime.hasUrls():return []
+    paths=[]
+    for url in mime.urls():
+        if not url.isLocalFile():return []
+        path=url.toLocalFile()
+        if Path(path).suffix.lower() not in {'.mp4','.mov','.mkv','.webm','.avi'}:return []
+        paths.append(path)
+    return paths
 
 
 def video_drop_path(mime):
@@ -46,19 +57,21 @@ class VideoDropFilter(QObject):
             return False
         if not event.mimeData().hasUrls():
             return False
-        path = video_drop_path(event.mimeData())
-        if self.window.worker or not path:
+        paths = video_drop_paths(event.mimeData())
+        if self.window.worker or not paths:
             event.ignore()
             return True
         event.acceptProposedAction()
         self.window.highlight_drop(kind != QEvent.Drop)
         if kind == QEvent.Drop:
-            QTimer.singleShot(0, lambda: self.window.open_video(path))
+            if len(paths)==1:QTimer.singleShot(0,lambda:self.window.open_video(paths[0]))
+            else:QTimer.singleShot(0,lambda:self.window.open_videos(paths))
         return True
 
 
 class VideoView(QGraphicsView):
     area_changed = Signal(object)
+    expand_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -94,6 +107,11 @@ class VideoView(QGraphicsView):
         p = self.mapToScene(event.position().toPoint())
         rect = self.sceneRect()
         return QPointF(min(rect.right(), max(0, p.x())), min(rect.bottom(), max(0, p.y())))
+
+    def mouseDoubleClickEvent(self,event):
+        if event.button()==Qt.LeftButton and not self.custom:
+            self.expand_requested.emit();event.accept()
+        else:super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event):
         if self.custom and event.button() == Qt.LeftButton:
@@ -134,9 +152,6 @@ class Fold(QWidget):
         self.body=QWidget();self.content=QVBoxLayout(self.body)
         self.content.setContentsMargins(2,8,2,8)
         self.body.hide();layout.addWidget(self.toggle);layout.addWidget(self.body)
-        self.effect=QGraphicsOpacityEffect(self.body);self.body.setGraphicsEffect(self.effect)
-        self.animation=QPropertyAnimation(self.effect,b'opacity',self)
-        self.animation.setDuration(140);self.animation.setEasingCurve(QEasingCurve.OutCubic)
         self.toggle.toggled.connect(self.set_open)
         self.translate(language)
 
@@ -145,10 +160,7 @@ class Fold(QWidget):
         self.toggle.setIcon(icon('chevron-down' if self.toggle.isChecked() else 'chevron-right'))
 
     def set_open(self,opened):
-        self.animation.stop()
         self.toggle.setChecked(opened);self.body.setVisible(opened)
-        if opened:
-            self.animation.setStartValue(.25);self.animation.setEndValue(1.);self.animation.start()
         self.toggle.setIcon(icon('chevron-down' if opened else 'chevron-right'))
 
 
@@ -164,6 +176,8 @@ class SettingRow(QWidget):
         self.help=QLabel();self.help.setWordWrap(True);self.help.setObjectName('muted')
         self.default_label=QLabel();self.default_label.setObjectName('muted')
         layout.addLayout(row);layout.addWidget(widget);layout.addWidget(self.help);layout.addWidget(self.default_label)
+        self.help.hide();self.default_label.hide();self.info.setCheckable(True)
+        self.info.toggled.connect(self.help.setVisible);self.info.toggled.connect(self.default_label.setVisible)
         self.translate(language)
 
     def translate(self,language):
@@ -175,6 +189,39 @@ class SettingRow(QWidget):
         self.default_label.setText(tr(language,'default',value=value))
         self.reset.setToolTip(tr(language,'reset'))
         self.reset.setAccessibleName(tr(language,'reset'))
+
+
+class PlanTableModel(QAbstractTableModel):
+    """Format only requested cells; large hidden plans create no table items."""
+    def __init__(self,parent=None):
+        super().__init__(parent);self.plan=[];self.reviews=[];self.language='uk'
+        self.review_starts=[];self.review_ends=[]
+
+    def set_plan(self,plan,reviews,language):
+        self.beginResetModel()
+        self.plan=list(plan);self.reviews=list(reviews);self.language=language
+        self.review_starts=[s.start for s in reviews];self.review_ends=[s.end for s in reviews]
+        self.endResetModel()
+
+    def rowCount(self,parent=None):return 0 if parent is not None and parent.isValid() else len(self.plan)
+    def columnCount(self,parent=None):return 0 if parent is not None and parent.isValid() else 3
+
+    def headerData(self,section,orientation,role=Qt.DisplayRole):
+        if role==Qt.DisplayRole and orientation==Qt.Horizontal and 0<=section<3:
+            return tr(self.language,('start','end','action')[section])
+        return super().headerData(section,orientation,role)
+
+    def data(self,index,role=Qt.DisplayRole):
+        if not index.isValid() or not 0<=index.row()<len(self.plan):return None
+        s=self.plan[index.row()];column=index.column()
+        if role==Qt.DisplayRole and column<2:return clock(s.start if column==0 else s.end)
+        if role not in (Qt.DisplayRole,Qt.ToolTipRole,Qt.BackgroundRole):return None
+        begin=bisect_right(self.review_ends,s.start);end=bisect_left(self.review_starts,s.end)
+        overlaps=self.reviews[begin:end]
+        if role==Qt.DisplayRole:
+            return tr(self.language,{'keep':'keep','remove':'remove','speed':'speed_up'}[s.action])+(' ⚠' if overlaps else '')
+        if role==Qt.BackgroundRole:return QBrush(QColor('#43365b')) if overlaps and column==2 else QBrush()
+        if overlaps:return review_tip(self.language,overlaps,s.start,s.end)
 
 
 class StatCard(QFrame):
@@ -192,9 +239,11 @@ class StatCard(QFrame):
 
 class Timeline(QWidget):
     selected=Signal(int)
+    range_selected=Signal(float,float)
     def __init__(self):
         super().__init__();self.plan=[];self.reviews=[];self.index=-1;self.position=0.;self.language='uk';self.ends=[]
         self.setMinimumHeight(42);self.setMouseTracking(True)
+        self.range_mode=False;self.drag_start=None;self.selection=None
 
     def set_plan(self,plan,reviews=()):
         self.plan=list(plan);self.reviews=list(reviews);self.ends=[s.end for s in plan];self.update()
@@ -215,16 +264,27 @@ class Timeline(QWidget):
             p.fillRect(QRectF(left,7,width,self.height()-15),QBrush(QColor('#c2a1ff'),Qt.BDiagPattern))
             p.fillRect(QRectF(left,4,width,4),QColor('#b08aff'))
         p.setPen(QPen(QColor('#fff'),2));x=int(self.position/duration*self.width());p.drawLine(x,0,x,self.height())
+        if self.selection:
+            a,b=sorted(self.selection);left=a/duration*self.width();right=b/duration*self.width()
+            rect=QRectF(left,1,right-left,self.height()-2)
+            p.fillRect(rect,QColor(100,170,255,85));p.setPen(QPen(QColor('#b9ddff'),2,Qt.DashLine));p.drawRect(rect)
+
+    def source_time(self,x):
+        return min(1,max(0,x/max(1,self.width())))*self.plan[-1].end if self.plan else 0
 
     def at(self,x):
         if not self.plan:return None
         return min(len(self.plan)-1,bisect_right(self.ends,max(0,x)/max(1,self.width())*self.plan[-1].end))
 
     def mousePressEvent(self,event):
+        if self.plan and event.button()==Qt.LeftButton and (self.range_mode or event.modifiers()&Qt.ShiftModifier):
+            self.drag_start=self.source_time(event.position().x());self.selection=(self.drag_start,self.drag_start);self.update();return
         index=self.at(event.position().x())
         if index is not None:self.selected.emit(index)
 
     def mouseMoveEvent(self,event):
+        if self.drag_start is not None:
+            self.selection=(self.drag_start,self.source_time(event.position().x()));self.update();return
         index=self.at(event.position().x())
         if index is not None:
             s=self.plan[index]
@@ -234,6 +294,13 @@ class Timeline(QWidget):
             review=review_tip(self.language,self.reviews,s.start,s.end)
             if review:tip+='\n\n'+review
             QToolTip.showText(event.globalPosition().toPoint(),tip,self)
+
+    def mouseReleaseEvent(self,event):
+        if self.drag_start is not None:
+            a,b=sorted((self.drag_start,self.source_time(event.position().x())));self.drag_start=None
+            self.selection=(a,b) if b-a>=.001 else None;self.update()
+            if self.selection:self.range_selected.emit(a,b)
+        else:super().mouseReleaseEvent(event)
 
 
 class MotionGraph(QWidget):

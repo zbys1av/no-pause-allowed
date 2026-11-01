@@ -50,6 +50,19 @@ def check(report_path):
             if result.returncode:
                 raise RuntimeError(result.stderr.decode(errors="replace"))
             video = probe(source)
+            from .batch import export_project,output_paths
+            from .model import Segment
+            project_items=[(video,[Segment(0,video.duration)])]*2
+            merged=directory/'project.mp4'
+            export_project(project_items,merged,Job())
+            combined=probe(merged)
+            if abs(combined.duration-2*video.duration)>.2 or not combined.audio:
+                raise RuntimeError('Packaged merged project export failed')
+            separate=directory/'separate';separate.mkdir()
+            export_project(project_items,separate,Job(),merged=False)
+            if not all(p.is_file() for p in output_paths([video,video],separate)):
+                raise RuntimeError('Packaged separate project export failed')
+            report.update(multiple_files=True,merged_export=True,separate_export=True)
             settings = Settings()
             from .adaptive import AdaptiveAnalysis
             from .motion import MotionTracker
@@ -125,6 +138,14 @@ def check(report_path):
             valid_frames = []
             window.view.item.videoSink().videoFrameChanged.connect(lambda f: valid_frames.append(f.isValid()))
             window.loaded(output)
+            original_source=window.player.source()
+            window.set_video_expanded(True);app.processEvents()
+            if window.sidebar.isVisible() or window.view.width()<window.width()*.9 or window.player.source()!=original_source:
+                raise RuntimeError('Packaged expanded video view failed')
+            window.set_video_expanded(False);app.processEvents()
+            if not window.sidebar.isVisible() or window.video_expanded:
+                raise RuntimeError('Packaged editor restore failed')
+            report.update(expanded_video=True,compact_ui=True,virtual_plan_table=True)
             from .model import MotionSample
             window.analyzed([MotionSample(0,0,False),MotionSample(1,.0001,True,persistent=True,
                 evidence='adjacent_change',bounds=(4,4,6,5)),MotionSample(2,0,False)])
@@ -138,8 +159,14 @@ def check(report_path):
                 raise RuntimeError('Packaged contextual review detection failed')
             window.analyzed([MotionSample(0,0,False),MotionSample(1,.0001,True,persistent=True,
                 evidence='background_changed',bounds=(4,4,6,5)),MotionSample(2,0,False)])
-            if not window.timeline.reviews or '⚠' not in window.table.item(0,2).text():
+            if not window.timeline.reviews or '⚠' not in window.table_model.index(0,2).data():
                 raise RuntimeError('Packaged uncertainty annotations failed')
+            if abs(window.plan[0].end-1)>.00001:
+                raise RuntimeError('Packaged review interval has no editable boundary')
+            window.set_range(.5,1.5);window.apply_range_action('remove')
+            if not all(s.action=='remove' for s in window.plan if s.start>=.5 and s.end<=1.5):
+                raise RuntimeError('Packaged arbitrary range editing failed')
+            report.update(editable_review_sections=True,manual_range_editing=True)
             window.analyzed(samples)
             from .debug import snapshot, write_report
             import zipfile

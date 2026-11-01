@@ -8,7 +8,7 @@ import io
 import json
 import sys
 import zipfile
-from .model import Settings,MotionSample,analyze_plan,statistics
+from .model import Settings,MotionSample,analyze_plan,statistics,split_plan
 
 
 def replay(path):
@@ -22,9 +22,12 @@ def replay(path):
                     bool(int(r['transient'])),bool(int(r['persistent'])),r.get('evidence',''),json.loads(r.get('bounds') or 'null'))
                  for r in csv.DictReader(io.StringIO(archive.read('samples.csv').decode('utf-8')))]
     report=analyze_plan(samples,data['video']['duration'],Settings(**data['plan_settings']),data['plan_mode'],data['speed'])
-    plan=[asdict(s) for s in report.plan]
+    segments=report.plan
+    if data.get('review',{}).get('section_boundaries'):
+        segments=split_plan(segments,[t for r in data['review']['intervals'] for t in (r['start'],r['end'])])
+    plan=[asdict(s) for s in segments]
     return dict(matches_recorded_automatic_plan=plan==data['automatic_plan'],
-                automatic_plan=plan,statistics=statistics(report.plan),
+                automatic_plan=plan,statistics=statistics(segments),
                 merged_bursts=report.merged_bursts,rejected_short=report.rejected_short,
                 lost_to_padding=report.lost_to_padding,
                 note='Replays temporal decisions from captured evidence; pixel detection requires original media.')

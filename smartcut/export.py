@@ -2,8 +2,8 @@
 import os
 from pathlib import Path
 import tempfile
-from .model import validate_plan
-from .process import run, tool
+from .model import validate_plan,coalesce_plan
+from .process import run, tool, publish
 from .errors import AppError
 from .i18n import Text
 
@@ -18,7 +18,7 @@ def tempo(speed):
 
 
 def export(video, plan, destination, job, progress=lambda *_: None,
-           crf=23, mute=False, preview=False, encoder="libx264"):
+           crf=23, mute=False, preview=False, encoder="libx264", canvas=None, force_audio=False):
     validate_plan(plan, video.duration)
     destination = Path(destination).absolute()
     if destination.resolve() == video.path.resolve():
@@ -29,21 +29,24 @@ def export(video, plan, destination, job, progress=lambda *_: None,
         raise AppError("error.mp4")
     if crf not in (18, 23, 28) or encoder not in ("libx264", "h264_nvenc", "h264_qsv", "h264_amf"):
         raise AppError("error.encoder")
-    kept = [s for s in plan if s.action != "remove"]
+    kept = [s for s in coalesce_plan(plan) if s.action != "remove"]
     total = sum(s.output_duration for s in kept)
     if not kept or total < .02:
         raise AppError("error.empty")
-    # Same volume as destination: final hard-link publishes atomically, without clobber.
+        # The temporary output stays on the destination volume for atomic publication.
     with tempfile.TemporaryDirectory(prefix="smartcut-", dir=destination.parent) as directory:
         temp = Path(directory)
         done = 0.
-        audio = video.audio and not mute
+        audio = (video.audio or force_audio) and not mute
         for i, s in enumerate(kept):
             job.check()
             speed = s.speed if s.action == "speed" else 1
             vf = f"setpts=(PTS-STARTPTS)/{speed}"
             if preview:
                 vf += ",scale=w='min(1280,iw)':h=-2"
+            if canvas:
+                w,h=canvas
+                vf += f",scale=trunc(iw*sar/2)*2:ih,setsar=1,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=30"
             # yuv420 H.264 requires even dimensions. Pad at most one pixel, never crop.
             vf += ",pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p"
             args = [tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
@@ -73,6 +76,8 @@ def export(video, plan, destination, job, progress=lambda *_: None,
                 graph = ("[0:a:0]aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo[a];"
                          "[1:a:0][a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
                          f"asetpts=PTS-STARTPTS{audio_speed},apad[outa]")
+                if not video.audio:
+                    graph = f"[1:a:0]asetpts=PTS-STARTPTS{audio_speed},apad[outa]"
                 args += ["-filter_complex", graph, "-map", "[outa]",
                          "-ac", "2", "-c:a", "pcm_s16le"]
             else:
@@ -95,8 +100,7 @@ def export(video, plan, destination, job, progress=lambda *_: None,
         args += ["-t", f"{total:.9f}", "-movflags", "+faststart", "-progress", "pipe:1", str(pending)]
         run(args, job, total, lambda f, stage: progress(.9+.1*f, stage), Text("stage.finalizing"))
         job.check()
-        # os.link fails rather than replacing a file created concurrently.
-        os.link(pending, destination)
+        publish(pending, destination)
     progress(1., Text("stage.export_complete"))
     return destination
 

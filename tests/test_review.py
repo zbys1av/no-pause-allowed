@@ -55,18 +55,18 @@ def test_review_gui_localization_manual_action_and_debug(tmp_path):
     samples=[MotionSample(0,0,False),MotionSample(3,.00001,True,persistent=True,evidence='background_changed',bounds=(4,4,6,5)),MotionSample(4,0,False)]
     window.analyzed(samples)
     assert window.timeline.reviews
-    assert '⚠' in window.table.item(0,2).text()
-    assert window.table.item(0,2).background().color().name()=='#43365b'
+    assert '⚠' in window.table_model.index(0,2).data()
+    assert window.table_model.index(0,2).data(Qt.BackgroundRole).color().name()=='#43365b'
     image=window.timeline.grab().toImage()
     assert image.pixelColor(5,5).name()=='#b08aff'
     assert image.pixelColor(5,image.height()-6).name()=='#4bae91'
     assert 'Потребує перевірки' in window.result_message.text()
     window.populate_segment(0)
     assert 'Зміна фону' in window.selected_label.text()
-    assert '00:00:03.00 із 00:00:03.60' in window.selected_label.text()
+    assert '00:00:03.00 із 00:00:03.00' in window.selected_label.text()
     window.set_language('en')
     assert 'Background change' in window.selected_label.text()
-    assert window.table.item(0,0).background().style()==Qt.NoBrush
+    assert window.table_model.index(0,0).data(Qt.BackgroundRole).style()==Qt.NoBrush
     window.set_action('remove')
     assert window.plan[0].action=='remove' and window.timeline.reviews
     target=tmp_path/'report.zip';write_report(snapshot(window),target,Job())

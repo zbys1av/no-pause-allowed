@@ -61,11 +61,17 @@ def test_open_analyze_preview_worker_pipeline(tmp_path):
     window.preview_mode.setCurrentIndex(1)
     wait_until(lambda: window.worker is None)
     assert window.preview_path.is_file()
-    assert window.player.source().toLocalFile() == str(window.preview_path)
+    assert Path(window.player.source().toLocalFile()) == window.preview_path
     frames = []
     window.view.item.videoSink().videoFrameChanged.connect(lambda frame: frames.append(frame.isValid()))
     window.player.play()
     wait_until(lambda: any(frames))
+    source_before=window.player.source();position_before=window.player.position()
+    window.set_video_expanded(True);app.processEvents()
+    assert window.player.source()==source_before
+    assert window.player.playbackState()==window.player.PlaybackState.PlayingState
+    assert window.player.position()>=position_before
+    window.set_video_expanded(False)
     window.player.pause()
     assert window.player.duration() > 2000
     assert "/ 00:00:03." in window.time.text()

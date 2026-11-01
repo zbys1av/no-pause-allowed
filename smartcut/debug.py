@@ -12,6 +12,7 @@ import tempfile
 import time
 import zipfile
 from . import __version__
+from .process import publish
 from .model import stabilize, activity_intervals, statistics
 from .review import review_spans,overlapping_reviews,review_sample_reasons,review_policy
 
@@ -96,7 +97,7 @@ def snapshot(window):
         width,height=analysis_dimensions(video,window.capture_settings or settings)
         pixel_count=width*height
         reviews=review_spans(samples,video.duration,pixel_count,settings.min_idle,settings.debounce)
-        data['review']=dict(intervals=[asdict(s) for s in reviews],
+        data['review']=dict(intervals=[asdict(s) for s in reviews],section_boundaries=True,
             seconds=sum(s.end-s.start for s in reviews),
             semantics='Heuristic visual ambiguity, not a calibrated probability. Annotation never changes the editing action.',
             policy=review_policy(settings.min_idle))
@@ -196,5 +197,5 @@ def write_report(captured, destination, job, progress=lambda *_:None):
                 'samples.csv: complete retained analysis; partial_samples.csv: last interrupted attempt only.\n'
                 'Reasons are explained in report.json/reasons. Times refer to the source video.\n'
                 'No video/audio/frames or environment credentials included. Filename and technical errors may identify the recording.\n')
-        job.check();os.link(pending,destination)
+        job.check();publish(pending,destination)
     return destination

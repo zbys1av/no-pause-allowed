@@ -1,4 +1,4 @@
-Smart Video Cutter 1.8 — Windows 10/11 x64 Portable
+Smart Video Cutter 1.10 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -56,3 +56,21 @@ Fine drawing, normal cursor movement and gradual strokes do not become purple
 just because their changes are small. Review flags require an explicit conflict
 or a brief local event surrounded by long stillness on both sides.
 Tooltips show exactly how much of a segment needs review.
+
+Multiple videos: select several files with Ctrl/Shift or drag them together.
+Use Add videos to extend the project and the selector to review each clip.
+Analyze all processes the list. Export all offers one merged MP4 or a separate
+MP4 per input. Merge follows list order, uses the first clip dimensions and
+30 fps, preserves aspect ratios with padding and fills missing audio with silence.
+Project edits are kept in memory until the application closes.
+
+Video view: click Expand video, double-click the video or press Ctrl+Enter
+to fill the current window. Esc or Back to editor restores the panels.
+Playback and editing state are preserved. Parameters toggles the sidebar.
+Statistics and manual editing opens detailed results. Info buttons reveal
+parameter help. The ... menu manages the order and removal of project clips.
+
+Uncertain intervals are separate editable timeline sections. Select one to
+remove, keep or speed it up. Select range or Shift+drag creates an arbitrary
+source interval; From/To fields refine its boundaries. Remove range cuts only
+that interval, even before analysis. Keep restores the chosen interval.

@@ -4,6 +4,7 @@ import threading
 import time
 import pytest
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
 from smartcut.app import Window, STYLE
 from smartcut.errors import AppError, user_error
 from smartcut.i18n import Text
@@ -62,7 +63,7 @@ def test_presets_simple_mode_and_live_localization():
     assert window.advanced.toggle.text() == 'Advanced Settings'
     assert window.raw_card.title.text() == 'Little/no movement'
     assert window.mode.itemText(0) == 'Remove pauses'
-    assert window.table.horizontalHeaderItem(2).text() == 'Action'
+    assert window.table_model.headerData(2,Qt.Horizontal) == 'Action'
     assert window.rows['minimum'].help.text().startswith('At 3 s')
     assert 'Default:' in window.rows['minimum'].default_label.text()
     assert 'Actual removal:' in window.details_text.text()

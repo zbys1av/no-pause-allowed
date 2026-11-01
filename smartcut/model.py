@@ -234,6 +234,43 @@ def move_boundary(plan, index, start, end, duration):
     return updated
 
 
+def split_plan(plan,boundaries):
+    """Introduce editable cuts without changing any actions or source coverage."""
+    if not plan:return []
+    duration=plan[-1].end;validate_plan(plan,duration)
+    cuts=sorted({float(t) for t in boundaries if isfinite(t) and 0<t<duration})
+    result=[];index=0
+    for segment in plan:
+        start=segment.start
+        while index<len(cuts) and cuts[index]<=start+1e-7:index+=1
+        while index<len(cuts) and cuts[index]<segment.end-1e-7:
+            end=cuts[index];result.append(replace(segment,start=start,end=end));start=end;index+=1
+        result.append(replace(segment,start=start))
+    validate_plan(result,duration)
+    return result
+
+
+def edit_range(plan,start,end,action='remove',speed=5):
+    """Apply an action to an exact arbitrary source interval, across existing cuts."""
+    duration=plan[-1].end if plan else 0
+    if not all(isfinite(t) for t in (start,end)) or not 0<=start<end<=duration:
+        raise AppError('error.range')
+    updated=split_plan(plan,(start,end))
+    updated=[replace(s,action=action,speed=speed) if s.start>=start-1e-7 and s.end<=end+1e-7 else s for s in updated]
+    validate_plan(updated,duration)
+    return updated
+
+
+def coalesce_plan(plan):
+    """Encoding can join adjacent identical actions while the editor keeps its cuts."""
+    result=[]
+    for s in plan:
+        if result and abs(result[-1].end-s.start)<1e-7 and result[-1].action==s.action and (s.action!='speed' or result[-1].speed==s.speed):
+            result[-1]=replace(result[-1],end=s.end)
+        else:result.append(s)
+    return result
+
+
 def statistics(plan):
     original = sum(s.end-s.start for s in plan)
     active = sum(s.end-s.start for s in plan if s.action == "keep")

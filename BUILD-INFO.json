@@ -1,19 +1,29 @@
 {
-  "version": "1.8.0",
-  "base_commit": "d8b44d534df8fe96a993dcc253b91932133cee2f",
-  "working_tree_changes": true,
-  "source_snapshot_sha256": "0957304b513645cedc88a56e4fa4e272658100667a38d97499f742a0a8150ec1",
-  "tested_under": "Wine 10 on Linux",
+  "version": "1.10.0",
+  "tested_under": "Native Windows x64",
+  "source_snapshot_sha256": "80ac9075208ffa6e4f9ad26243b54e98dbb5691b31841fb3ba494ac78a85104f",
+  "source_snapshot_algorithm": "SHA256 of sorted smartcut/**/*.py: relative POSIX path + NUL + contents",
+  "source_tests": {
+    "passed": 115
+  },
   "self_test": {
     "ok": true,
     "frozen": true,
     "ffmpeg": "ffmpeg.exe",
     "ffprobe": "ffprobe.exe",
+    "multiple_files": true,
+    "merged_export": true,
+    "separate_export": true,
+    "expanded_video": true,
+    "compact_ui": true,
+    "virtual_plan_table": true,
+    "editable_review_sections": true,
+    "manual_range_editing": true,
     "analysis_samples": 24,
     "output_duration": 3.0,
     "audio": true,
     "decoded_video_frame": true,
-    "version": "1.8.0",
+    "version": "1.10.0",
     "localized_ui": true,
     "svg_icons": true,
     "simple_mode": true,
@@ -25,5 +35,11 @@
     "review_annotations": true,
     "long_motion_evidence": true,
     "selective_review": true
-  }
+  },
+  "build_script": "scripts/build_windows.ps1",
+  "python": "3.12.14",
+  "pyside6": "6.8.3",
+  "numpy": "2.5.4",
+  "pyinstaller": "6.22.3",
+  "root_payload_matches_verified_extracted_bundle": true
 }

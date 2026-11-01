@@ -3,9 +3,10 @@
 - `main` must contain a complete runnable portable application at its root:
   SmartVideoCutter.exe, _internal/, tools/, licenses/ and the matching source.
   Never remove the bundled application or replace it with a source-only checkout.
-- The owner requested restoration of all functionality from 1581a89 (version
-  1.8.0). The restored EXE's 22 smartcut modules match that source. Multi-file
-  changes from 1.9 were rolled back to honor this restoration request.
+- Version 1.10 adds expanded video and a compact, responsive UI on top of
+  version 1.9. Version 1.9 extends the restored 1.8 baseline with multiple-file projects,
+  per-file editing, batch analysis and merged/separate export, explicitly
+  requested by the owner on 2026-11-01. RESTORATION.json is historical.
 - Do not create, restore, run, or depend on GitHub Actions workflows. Do not
   maintain a separate portable branch or installer.
 - End users must be able to extract main.zip and run SmartVideoCutter.exe without

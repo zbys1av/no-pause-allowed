@@ -14,6 +14,15 @@ from .errors import AppError
 _spawn_lock = threading.Lock()
 
 
+def publish(source, destination):
+    """Publish on the same volume, atomically and without replacing existing files."""
+    if os.name == 'nt':
+        # Windows rename rejects an existing destination and also works on exFAT.
+        os.rename(source, destination)
+    else:
+        os.link(source, destination)
+
+
 def spawn(args, **kwargs):
     # PyInstaller changes Windows DLL search globally for its Qt libraries. An
     # FFmpeg child must inherit the normal OS search, not Qt's private DLLs.

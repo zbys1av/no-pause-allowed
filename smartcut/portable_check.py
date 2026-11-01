@@ -128,6 +128,16 @@ def check(report_path):
             from .model import MotionSample
             window.analyzed([MotionSample(0,0,False),MotionSample(1,.0001,True,persistent=True,
                 evidence='adjacent_change',bounds=(4,4,6,5)),MotionSample(2,0,False)])
+            if window.timeline.reviews:
+                raise RuntimeError('Ordinary small strokes must not receive review annotations')
+            from .review import review_spans
+            isolated=review_spans([MotionSample(0,0,False),MotionSample(5,0,False),
+                MotionSample(5.125,.00001,True,persistent=True,evidence='adjacent_change',bounds=(4,4,6,5)),
+                MotionSample(10,0,False)],10,960*540)
+            if len(isolated)!=1 or isolated[0].reasons!=('isolated_local_change',):
+                raise RuntimeError('Packaged contextual review detection failed')
+            window.analyzed([MotionSample(0,0,False),MotionSample(1,.0001,True,persistent=True,
+                evidence='background_changed',bounds=(4,4,6,5)),MotionSample(2,0,False)])
             if not window.timeline.reviews or '⚠' not in window.table.item(0,2).text():
                 raise RuntimeError('Packaged uncertainty annotations failed')
             window.analyzed(samples)
@@ -157,7 +167,7 @@ def check(report_path):
                           audio=True, decoded_video_frame=True, version=__version__,
                           localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True, local_cycles=True,
                           adaptive_analysis=True,adaptive_certified_quiet=adaptive.stats['certified_quiet'],parallel_analysis=True,
-                          review_annotations=True,long_motion_evidence=True)
+                          review_annotations=True,long_motion_evidence=True,selective_review=True)
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

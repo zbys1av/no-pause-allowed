@@ -27,7 +27,7 @@ from .preferences import read_language,save_language
 from .icons import icon
 from .worker import Worker
 from .debug import Journal,snapshot,write_report
-from .widgets import VideoView,Timeline,VideoDropFilter,video_drop_path,Fold,SettingRow,StatCard,MotionGraph,clock
+from .widgets import VideoView,Timeline,VideoDropFilter,video_drop_path,Fold,SettingRow,StatCard,MotionGraph,clock,review_tip
 
 
 class ExportDialog(QDialog):
@@ -401,14 +401,17 @@ class Window(QMainWindow):
 
     def render_plan(self):
         dimensions=analysis_dimensions(self.video,self.capture_settings or self.settings()) if self.video else (0,0)
-        reviews=review_spans(self.samples,self.video.duration,dimensions[0]*dimensions[1]) if self.video else []
+        reviews=review_spans(self.samples,self.video.duration,dimensions[0]*dimensions[1],
+                             self.minimum.value(),self.debounce.value()) if self.video else []
         self.timeline.set_plan(self.plan,reviews);self.table.setRowCount(len(self.plan))
         for i,s in enumerate(self.plan):
             reasons=review_reasons(reviews,s.start,s.end)
-            tip=self.t('review.tip',reasons='; '.join(self.t('review.'+r) for r in reasons)) if reasons else ''
+            tip=review_tip(self.language,reviews,s.start,s.end)
             for j,text in enumerate((clock(s.start),clock(s.end),self.t({'keep':'keep','remove':'remove','speed':'speed_up'}[s.action]))):
                 item=QTableWidgetItem(text+(' ⚠' if reasons and j==2 else ''))
-                if reasons:item.setBackground(QColor('#43365b'));item.setToolTip(tip)
+                if reasons:
+                    if j==2:item.setBackground(QColor('#43365b'))
+                    item.setToolTip(tip)
                 self.table.setItem(i,j,item)
         if self.plan:
             index=min(max(0,self.timeline.index),len(self.plan)-1);self.populate_segment(index,select=False)
@@ -511,7 +514,7 @@ class Window(QMainWindow):
             self.timeline.index=index;self.timeline.update();self.table.selectRow(index);self.selected_box.show()
         label=self.t('segment.selected',start=clock(s.start),end=clock(s.end))
         reasons=review_reasons(self.timeline.reviews,s.start,s.end)
-        if reasons:label+='\n'+self.t('review.tip',reasons='; '.join(self.t('review.'+r) for r in reasons))
+        if reasons:label+='\n'+review_tip(self.language,self.timeline.reviews,s.start,s.end)
         self.selected_label.setText(label)
 
     def select_segment(self,index):

@@ -13,7 +13,7 @@ import time
 import zipfile
 from . import __version__
 from .model import stabilize, activity_intervals, statistics
-from .review import review_spans,overlapping_reviews,sample_review_reasons
+from .review import review_spans,overlapping_reviews,review_sample_reasons,review_policy
 
 
 class Journal:
@@ -29,6 +29,7 @@ class Journal:
 
 
 REASONS = {
+    'isolated_local_change': 'Short local event surrounded by long stillness on both sides; retained for review. Small size alone is not ambiguous.',
     'background_conflict': 'Background guard conflicts with the local-cycle interpretation; inspect source pixels.',
     'small_change': 'Small visual change could be ink, cursor, interface or codec noise; retained conservatively, needs review.',
     'gradual_change': 'Accumulated faint change, not semantic recognition; needs review.',
@@ -94,10 +95,11 @@ def snapshot(window):
         from .motion import analysis_dimensions
         width,height=analysis_dimensions(video,window.capture_settings or settings)
         pixel_count=width*height
-        reviews=review_spans(samples,video.duration,pixel_count)
+        reviews=review_spans(samples,video.duration,pixel_count,settings.min_idle,settings.debounce)
         data['review']=dict(intervals=[asdict(s) for s in reviews],
             seconds=sum(s.end-s.start for s in reviews),
-            semantics='Heuristic visual ambiguity, not a calibrated probability. Annotation never changes the editing action.')
+            semantics='Heuristic visual ambiguity, not a calibrated probability. Annotation never changes the editing action.',
+            policy=review_policy(settings.min_idle))
         filtered, _ = stabilize(samples,video.duration,settings.debounce)
         active = activity_intervals(filtered,video.duration)
         data['stabilized_activity'] = active
@@ -171,6 +173,9 @@ def write_report(captured, destination, job, progress=lambda *_:None):
             job.check()
             archive.writestr('report.json',json.dumps(data,ensure_ascii=False,indent=2,allow_nan=False))
             for name,raw,stable in [('samples.csv',samples,filtered),('partial_samples.csv',partial,None)]:
+                settings=data.get('plan_settings') or {}
+                flags=review_sample_reasons(raw,data['video']['duration'],data.get('review_pixel_count',0),
+                    settings.get('min_idle',3.),settings.get('debounce',.3)) if stable is not None and data.get('video') else None
                 with archive.open(name,'w') as stream:
                     with io.TextIOWrapper(stream,encoding='utf-8',newline='') as text:
                         writer=csv.writer(text);writer.writerow(['time_s','score','raw_active','transient','persistent','stabilized_active','reason','evidence','bounds','review_reasons'])
@@ -183,7 +188,7 @@ def write_report(captured, destination, job, progress=lambda *_:None):
                             kept=bool(stable[i][2]) if stable is not None else ''
                             reason='merged_transient' if active and kept is False else 'lasting_change' if persistent else 'movement_preserved' if active else 'below_motion_threshold'
                             if getattr(s,'evidence','')=='certified_quiet':reason='certified_quiet'
-                            review=sample_review_reasons(s,data.get('review_pixel_count',0)) if stable is not None else ()
+                            review=flags[i] if flags is not None else ()
                             writer.writerow([t,score,int(active),int(transient),int(persistent),kept,reason,getattr(s,'evidence',''),json.dumps(getattr(s,'bounds',None)),json.dumps(review)])
             archive.writestr('README.txt','Smart Video Cutter diagnostic report / Діагностичний звіт\n'
                 'Надішліть увесь ZIP для аналізу. Send this whole ZIP for investigation.\n'

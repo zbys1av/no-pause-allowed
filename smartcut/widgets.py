@@ -9,12 +9,20 @@ from PySide6.QtWidgets import (QWidget,QGraphicsView,QGraphicsScene,QGraphicsRec
 from pathlib import Path
 from .i18n import tr,Text
 from .icons import icon
-from .review import review_reasons
+from .review import overlapping_reviews
 
 
 def clock(value):
     value=max(0,value)
     return f"{int(value)//3600:02}:{int(value)//60%60:02}:{value%60:05.2f}"
+
+
+def review_tip(language,spans,start,end):
+    overlaps=overlapping_reviews(spans,start,end)
+    if not overlaps:return ''
+    reasons=sorted({r for s in overlaps for r in s.reasons})
+    return tr(language,'review.tip',time=clock(sum(s.end-s.start for s in overlaps)),
+              duration=clock(end-start),reasons='; '.join(tr(language,'review.'+r) for r in reasons))
 
 
 def video_drop_path(mime):
@@ -223,8 +231,8 @@ class Timeline(QWidget):
             tip=tr(self.language,'segment.tip',
                 start=clock(s.start),end=clock(s.end),duration=clock(s.end-s.start),
                 action=tr(self.language,{'keep':'keep','remove':'remove','speed':'speed_up'}[s.action]))
-            reasons=review_reasons(self.reviews,s.start,s.end)
-            if reasons:tip+='\n\n'+tr(self.language,'review.tip',reasons='; '.join(tr(self.language,'review.'+r) for r in reasons))
+            review=review_tip(self.language,self.reviews,s.start,s.end)
+            if review:tip+='\n\n'+review
             QToolTip.showText(event.globalPosition().toPoint(),tip,self)
 
 

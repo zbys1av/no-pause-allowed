@@ -3,7 +3,8 @@ from dataclasses import dataclass, field
 
 CATALOG = {
  'review.summary': ('Потребує перевірки: {time}. Фіолетове штрихування позначає неоднозначні зміни; поточні дії монтажу збережено.', 'Review needed: {time}. Purple hatching marks ambiguous changes; current editing actions are retained.'),
- 'review.tip': ('Потребує перевірки: {reasons}\nПерегляньте оригінал і за потреби змініть дію сегмента.', 'Review needed: {reasons}\nPreview the original and change the segment action if needed.'),
+ 'review.tip': ('Потребує перевірки {time} із {duration} цієї ділянки: {reasons}\nПерегляньте оригінал і за потреби змініть дію сегмента.', 'Review needed for {time} of this {duration} segment: {reasons}\nPreview the original and change the segment action if needed.'),
+ 'review.isolated_local_change': ('Короткий локальний сплеск серед тривалої нерухомості', 'Brief local event surrounded by long stillness'),
  'review.small_change': ('Дрібні зміни: можливі штрихи, курсор або шум запису', 'Small changes: possible strokes, cursor or recording noise'),
  'review.background_conflict': ('Зміна фону суперечить розпізнаному миготінню', 'Background change conflicts with recognized blinking'),
  'review.gradual_change': ('Слабка зміна, виявлена лише накопиченням', 'Faint change detected through accumulation'),

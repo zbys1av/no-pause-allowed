@@ -1,4 +1,4 @@
-Smart Video Cutter 1.7 — Windows 10/11 x64 Portable
+Smart Video Cutter 1.8 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -51,3 +51,8 @@ Recorded scene changes no longer revoke older confirmed blinks unnecessarily.
 Purple hatching marks ambiguous visual changes, while the action color remains
 visible. Hover or select a segment for reasons; choose Keep/Remove/Speed manually.
 Purple is a review flag, not a probability or a new export action.
+
+Fine drawing, normal cursor movement and gradual strokes do not become purple
+just because their changes are small. Review flags require an explicit conflict
+or a brief local event surrounded by long stillness on both sides.
+Tooltips show exactly how much of a segment needs review.

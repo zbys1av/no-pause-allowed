@@ -1,7 +1,7 @@
 [Setup]
 AppId={{6C49F572-A3E2-4A1A-911D-D651ED8AE879}
 AppName=Smart Video Cutter
-AppVersion=1.7.0
+AppVersion=1.8.0
 DefaultDirName={localappdata}\Programs\SmartVideoCutter
 DefaultGroupName=Smart Video Cutter
 PrivilegesRequired=lowest

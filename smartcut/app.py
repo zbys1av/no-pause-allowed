@@ -18,6 +18,7 @@ from .motion import analyze,analysis_dimensions
 from .review import review_spans,review_reasons
 from .video import probe
 from .export import export,proxy
+from .project import export_project
 from .progress import AnalysisEstimate
 from .profiles import PROFILES
 from .state import State,Workflow
@@ -38,6 +39,11 @@ class ExportDialog(QDialog):
         self.audio=QComboBox();self.audio.addItems([t('audio.keep'),t('audio.mute')])
         self.encoder=QComboBox();self.encoder.addItems([t('encoder.cpu'),'NVIDIA · NVENC','Intel · QSV','AMD · AMF'])
         layout.addRow(t('quality'),self.quality);layout.addRow(t('audio'),self.audio);layout.addRow(t('encoder'),self.encoder)
+        self.output_mode=QComboBox()
+        self.output_mode.addItems([t('project.current'),t('project.separate'),t('project.combined')])
+        if len(parent.project)>1:
+            self.output_mode.setCurrentIndex(1);layout.addRow(t('project.output'),self.output_mode)
+            join_note=QLabel(t('project.join_note'));join_note.setWordWrap(True);layout.addRow(join_note)
         note=QLabel(t('encoder.note'));note.setWordWrap(True);layout.addRow(note)
         buttons=QHBoxLayout();cancel=QPushButton(t('cancel'));save=QPushButton(t('save'));save.setObjectName('primary')
         cancel.clicked.connect(self.reject);save.clicked.connect(self.accept);buttons.addWidget(cancel);buttons.addWidget(save);layout.addRow(buttons)
@@ -48,6 +54,7 @@ class Window(QMainWindow):
         super().__init__();self.language=language or read_language();self.remember=remember
         self.setWindowTitle(f'Smart Video Cutter · {__version__}');self.resize(1280,920)
         self.video=None;self.samples=[];self.plan=[];self.automatic=[];self.report=None
+        self.project=[];self.project_index=0
         self.area=(0,0,1,1);self.worker=None;self.closing=False;self.dirty=False;self.manual_changed=False;self.plan_reset_notice=False
         self.capture_settings=None;self.capture_area_mode=0;self.pending_settings=None;self.pending_area_mode=0
         self.preview_path=self.proxy_path=None;self.last_export_path='';self.current_stage=None
@@ -98,6 +105,14 @@ class Window(QMainWindow):
         layout.addLayout(steps)
         meta=QHBoxLayout();self.metadata=QLabel();self.metadata.setWordWrap(True);meta.addWidget(self.metadata,1)
         self.file_details_button=self.button('file.details',self.file_details,'film');meta.addWidget(self.file_details_button);layout.addLayout(meta)
+        project_bar=QHBoxLayout();self.project_picker=QComboBox();self.project_picker.currentIndexChanged.connect(self.select_video)
+        project_bar.addWidget(self.project_picker,1)
+        self.add_files=self.button('project.add',lambda:self.open_dialog(append=True),'folder-open');project_bar.addWidget(self.add_files)
+        self.move_up=self.button('project.up',lambda:self.move_video(-1));project_bar.addWidget(self.move_up)
+        self.move_down=self.button('project.down',lambda:self.move_video(1));project_bar.addWidget(self.move_down)
+        self.remove_file=self.button('project.remove',self.remove_video);project_bar.addWidget(self.remove_file)
+        self.analyze_all=self.button('project.analyze',self.start_project_analysis,'activity');project_bar.addWidget(self.analyze_all)
+        layout.addLayout(project_bar)
         self.splitter=QSplitter();layout.addWidget(self.splitter,1)
         center=QWidget();editor=QVBoxLayout(center);editor.setContentsMargins(0,0,14,0);editor.setSpacing(9)
         self.drop_zone=self.button('drop',self.open_dialog,'upload');self.drop_zone.setObjectName('dropZone');self.drop_zone.setMinimumHeight(110);editor.addWidget(self.drop_zone)
@@ -299,14 +314,111 @@ class Window(QMainWindow):
         box.setText(self.t('file.info',name=v.path.name,duration=clock(v.duration),width=v.width,height=v.height,fps=f'{v.fps:.2f}',size=f'{v.size/1024**2:.1f}',format=v.format,audio=self.t('file.audio' if v.audio else 'file.silent')))
         box.addButton(self.t('close'),QMessageBox.AcceptRole);box.exec()
 
-    def open_dialog(self):
-        path,_=QFileDialog.getOpenFileName(self,self.t('open'),'',self.t('file.filter'),options=QFileDialog.DontUseNativeDialog)
-        if path:self.open_video(path)
+    def open_dialog(self,checked=False,append=False):
+        paths,_=QFileDialog.getOpenFileNames(self,self.t('open'),'',self.t('file.filter'),options=QFileDialog.DontUseNativeDialog)
+        if paths:self.open_videos(paths,append=append)
 
     def open_video(self,path):
+        self.open_videos([path])
+
+    def open_videos(self,paths,append=False):
         if self.worker or self.closing:return
-        if self.plan and not self.question('discard.title','discard'):return
-        self.work(lambda job,p:probe(path,job),self.loaded,Text('state.loading'),'loading')
+        if not append and (self.plan or any(e.get('plan') for e in self.project)) and not self.question('discard.title','discard'):return
+        paths=list(dict.fromkeys(str(Path(p).resolve()) for p in paths))
+        if append:
+            existing={str(e['video'].path) for e in self.project}
+            paths=[p for p in paths if p not in existing]
+        if not paths:return
+        def load(job,progress):
+            videos=[]
+            for path in paths:
+                job.check();videos.append(probe(path,job))
+            return videos
+        def done(videos):
+            self.save_video_state()
+            if not append:self.project=[]
+            self.project.extend({'video':v} for v in videos)
+            self.project_index=len(self.project)-len(videos)
+            self.loaded(videos[0]);self.save_video_state();self.refresh_project()
+        self.work(load,done,Text('state.loading'),'loading')
+
+    EDITOR_FIELDS=('samples','plan','automatic','report','capture_settings','capture_area_mode',
+                   'dirty','manual_changed','plan_reset_notice','plan_settings','area',
+                   'last_analysis_elapsed','last_analysis_debug','preview_path','proxy_path')
+
+    def save_video_state(self):
+        if not self.project or not self.video:return
+        entry=self.project[self.project_index]
+        entry.update({key:getattr(self,key) for key in self.EDITOR_FIELDS})
+        entry['settings']=self.settings()
+        entry['controls']=(self.profile.currentIndex(),self.mode.currentIndex(),self.speed.currentIndex(),self.detection.currentIndex(),self.parallel.currentIndex())
+
+    def refresh_project(self):
+        self.project_picker.blockSignals(True);self.project_picker.clear()
+        for i,entry in enumerate(self.project):self.project_picker.addItem(f"{i+1}. {entry['video'].path.name}")
+        self.project_picker.setCurrentIndex(self.project_index);self.project_picker.blockSignals(False);self.render()
+
+    def select_video(self,index):
+        if self.worker or not 0<=index<len(self.project) or index==self.project_index:return
+        self.save_video_state();self.project_index=index;entry=self.project[index]
+        self.loaded(entry['video'])
+        if 'settings' in entry:
+            self._updating=True
+            settings=entry['settings'];profile,mode,speed,area,parallel=entry['controls']
+            # Profile's signal can reset controls, so block it while restoring.
+            self.profile.blockSignals(True);self.profile.setCurrentIndex(profile);self.profile.blockSignals(False)
+            for widget,value in ((self.sensitivity,settings.sensitivity),(self.minimum,settings.min_idle),(self.padding,settings.padding),(self.frequency,settings.sample_fps),(self.debounce,settings.debounce)):
+                widget.setValue(value)
+            for widget,value in ((self.mode,mode),(self.speed,speed),(self.detection,area),(self.parallel,parallel),(self.detail,(320,640,960,1280).index(settings.analysis_width))):widget.setCurrentIndex(value)
+            self.adaptive.setChecked(settings.adaptive)
+            for key in self.EDITOR_FIELDS:setattr(self,key,entry[key])
+            self._updating=False
+            self.workflow.state=State.ANALYSIS_COMPLETE if self.samples else State.READY
+            self.analysis_estimate=None;self.graph.set_samples(self.samples,self.video.duration)
+            if area:
+                x,y,w,h=self.area;self.view.outline.setRect(x*self.video.display_width,y*self.video.height,w*self.video.display_width,h*self.video.height);self.view.outline.show()
+            self.update_defaults();self.render_plan()
+        self.refresh_project()
+
+    def move_video(self,offset):
+        target=self.project_index+offset
+        if self.worker or not 0<=target<len(self.project):return
+        self.save_video_state()
+        self.project[self.project_index],self.project[target]=self.project[target],self.project[self.project_index]
+        self.project_index=target;self.refresh_project()
+
+    def remove_video(self):
+        if self.worker or len(self.project)<2:return
+        if not self.question('discard.title','discard'):return
+        index=self.project_index;self.project.pop(index)
+        # Switch without saving the removed editor into another entry.
+        self.video=None;self.project_index=-1
+        self.select_video(min(index,len(self.project)-1))
+
+    def start_project_analysis(self):
+        if self.worker or not self.project:return
+        self.save_video_state()
+        if any(e.get('manual_changed') for e in self.project) and not self.question('discard.title','discard'):return
+        fallback=self.settings();mode=self.mode.currentIndex()
+        inputs=[(e['video'],e.get('settings',fallback),e.get('controls',(self.profile.currentIndex(),mode,self.speed.currentIndex(),self.detection.currentIndex(),self.parallel.currentIndex()))) for e in self.project]
+        def operation(job,progress):
+            results=[]
+            for i,(video,settings,controls) in enumerate(inputs):
+                job.check()
+                samples=analyze(video,settings,job,lambda f,s,i=i:progress((i+f)/len(inputs),s))
+                report=analyze_plan(samples,video.duration,settings,'remove' if controls[1]==0 else 'speed',(2,5,10,20)[controls[2]])
+                results.append((samples,report,dict(getattr(job,'debug_analysis_performance',{}))))
+            return results
+        def done(results):
+            for entry,(video,settings,controls),(samples,report,performance) in zip(self.project,inputs,results):
+                entry.update(samples=samples,report=report,plan=list(report.plan),automatic=list(report.plan),
+                    settings=settings,controls=controls,capture_settings=settings,capture_area_mode=controls[3],
+                    dirty=False,manual_changed=False,plan_reset_notice=False,plan_settings=settings,area=settings.area,
+                    last_analysis_elapsed=None,last_analysis_debug={'performance':performance,'state':State.ANALYSIS_COMPLETE.value},preview_path=None,proxy_path=None)
+            entry=self.project[self.project_index]
+            for key in self.EDITOR_FIELDS:setattr(self,key,entry[key])
+            self.graph.set_samples(self.samples,self.video.duration);self.invalidate_preview();self.render_plan()
+        self.work(operation,done,Text('state.analyzing'),'analysis')
 
     def loaded(self,video):
         self.journal.add('video_loaded',duration=video.duration,width=video.width,height=video.height)
@@ -460,6 +572,12 @@ class Window(QMainWindow):
     def render(self):
         self.render_results()
         loaded=self.video is not None;busy=self.worker is not None
+        self.project_picker.setEnabled(not busy)
+        self.add_files.setEnabled(not busy)
+        self.move_up.setEnabled(not busy and self.project_index>0)
+        self.move_down.setEnabled(not busy and self.project_index<len(self.project)-1)
+        self.remove_file.setEnabled(not busy and len(self.project)>1)
+        self.analyze_all.setEnabled(not busy and len(self.project)>1)
         self.debug_button.setEnabled(not busy)
         self.debug_button.setToolTip(self.t('debug.help'))
         self.sidebar.setVisible(loaded);self.view.setVisible(loaded);self.player_controls.setVisible(loaded);self.seek.setVisible(loaded);self.file_details_button.setVisible(loaded)
@@ -568,8 +686,9 @@ class Window(QMainWindow):
         self.preview_mode.setCurrentIndex(0);self.preview_path=None;self.cleanup_cache()
 
     def cleanup_cache(self):
+        retained={e.get(key) for e in self.project for key in ('preview_path','proxy_path')}
         for path in self.cache.glob('*.mp4'):
-            if path not in (self.preview_path,self.proxy_path):
+            if path not in (self.preview_path,self.proxy_path) and path not in retained:
                 try:path.unlink()
                 except OSError:pass
 
@@ -601,13 +720,31 @@ class Window(QMainWindow):
 
     def start_export(self):
         if not self.plan or self.dirty or self.worker:return
-        if statistics(self.plan)['sections']==0 and not self.question('unchanged.title','unchanged.confirm'):return
+        single=len(self.project)<=1
+        if single and statistics(self.plan)['sections']==0 and not self.question('unchanged.title','unchanged.confirm'):return
         dialog=ExportDialog(self)
         if dialog.exec()!=QDialog.Accepted:return
+        self.save_video_state()
+        output_mode=dialog.output_mode.currentIndex()
+        if output_mode:
+            if any(not e.get('plan') or e.get('dirty') for e in self.project):
+                self.show_error(AppError('error.project_analysis'));return
+            if any(statistics(e['plan'])['output']<.02 for e in self.project):
+                self.show_error(AppError('error.empty'));return
+            unchanged=any(statistics(e['plan'])['sections']==0 for e in self.project)
+        else:unchanged=statistics(self.plan)['sections']==0
+        if unchanged and not single and not self.question('unchanged.title','unchanged.confirm'):return
         suggested=str(self.video.path.with_name(self.video.path.stem+'_smartcut.mp4'))
-        destination,_=QFileDialog.getSaveFileName(self,self.t('export.title'),suggested,'MP4 (*.mp4)',options=QFileDialog.DontConfirmOverwrite|QFileDialog.DontUseNativeDialog)
+        if output_mode==1:
+            destination=QFileDialog.getExistingDirectory(self,self.t('export.title'),str(self.video.path.parent),options=QFileDialog.DontUseNativeDialog)
+        else:
+            destination,_=QFileDialog.getSaveFileName(self,self.t('export.title'),suggested,'MP4 (*.mp4)',options=QFileDialog.DontConfirmOverwrite|QFileDialog.DontUseNativeDialog)
         if not destination:return
         quality=(18,23,28)[dialog.quality.currentIndex()];mute=dialog.audio.currentIndex()==1;encoder=('libx264','h264_nvenc','h264_qsv','h264_amf')[dialog.encoder.currentIndex()]
+        if output_mode:
+            items=[(e['video'],list(e['plan'])) for e in self.project]
+            self.work(lambda job,p:export_project(items,destination,job,p,combined=output_mode==2,crf=quality,mute=mute,encoder=encoder),
+                      lambda paths:self.exported('\n'.join(str(p) for p in paths)),Text('state.exporting'),'export');return
         self.work(lambda job,p:export(self.video,list(self.plan),destination,job,p,crf=quality,mute=mute,encoder=encoder),self.exported,Text('state.exporting'),'export')
 
     def exported(self,path):self.last_export_path=str(path)

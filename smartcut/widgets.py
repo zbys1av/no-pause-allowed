@@ -32,6 +32,17 @@ def video_drop_path(mime):
     return path if Path(path).suffix.lower() in {".mp4", ".mov", ".mkv", ".webm", ".avi"} else None
 
 
+def video_drop_paths(mime):
+    if not mime.hasUrls():return []
+    paths=[]
+    for url in mime.urls():
+        if not url.isLocalFile():return []
+        path=url.toLocalFile()
+        if Path(path).suffix.lower() not in {'.mp4','.mov','.mkv','.webm','.avi'}:return []
+        if path not in paths:paths.append(path)
+    return paths
+
+
 class VideoDropFilter(QObject):
     """Handle file drops before graphics/table viewports consume drag events."""
     def __init__(self, window):
@@ -46,14 +57,15 @@ class VideoDropFilter(QObject):
             return False
         if not event.mimeData().hasUrls():
             return False
-        path = video_drop_path(event.mimeData())
-        if self.window.worker or not path:
+        paths = video_drop_paths(event.mimeData())
+        if self.window.worker or not paths:
             event.ignore()
             return True
         event.acceptProposedAction()
         self.window.highlight_drop(kind != QEvent.Drop)
         if kind == QEvent.Drop:
-            QTimer.singleShot(0, lambda: self.window.open_video(path))
+            if len(paths)==1:QTimer.singleShot(0, lambda: self.window.open_video(paths[0]))
+            else:QTimer.singleShot(0, lambda: self.window.open_videos(paths))
         return True
 
 

@@ -2,6 +2,17 @@
 from dataclasses import dataclass, field
 
 CATALOG = {
+ 'project.add': ('Додати відео', 'Add videos'),
+ 'project.up': ('↑ Раніше', '↑ Earlier'),
+ 'project.down': ('↓ Пізніше', '↓ Later'),
+ 'project.remove': ('Прибрати', 'Remove file'),
+ 'project.analyze': ('Аналізувати всі', 'Analyze all'),
+ 'project.output': ('Файли на виході', 'Output files'),
+ 'project.current': ('Лише вибране відео', 'Selected video only'),
+ 'project.separate': ('Усі відео — окремі файли', 'All videos — separate files'),
+ 'project.combined': ('Усі відео — один файл', 'All videos — one file'),
+ 'project.join_note': ('Один файл: порядок зі списку, розмір першого відео, 30 кадрів/с. Інші пропорції — з полями; відео без звуку — з тишею.', 'One file: list order, first video size, 30 fps. Other aspect ratios are letterboxed; silent videos receive silence.'),
+ 'error.project_analysis': ('Спочатку проаналізуйте всі відео з актуальними параметрами. Натисніть «Аналізувати всі» або проаналізуйте кожне окремо.', 'Analyze every video with current settings first. Use Analyze all or analyze each video individually.'),
  'review.summary': ('Потребує перевірки: {time}. Фіолетове штрихування позначає неоднозначні зміни; поточні дії монтажу збережено.', 'Review needed: {time}. Purple hatching marks ambiguous changes; current editing actions are retained.'),
  'review.tip': ('Потребує перевірки {time} із {duration} цієї ділянки: {reasons}\nПерегляньте оригінал і за потреби змініть дію сегмента.', 'Review needed for {time} of this {duration} segment: {reasons}\nPreview the original and change the segment action if needed.'),
  'review.isolated_local_change': ('Короткий локальний сплеск серед тривалої нерухомості', 'Brief local event surrounded by long stillness'),
@@ -33,7 +44,7 @@ CATALOG = {
  'language': ('Мова інтерфейсу', 'Interface language'), 'close': ('Закрити', 'Close'),
  'unit.seconds': ('с', 's'),
  'file.filter': ('Відео (*.mp4 *.mov *.mkv *.webm *.avi)', 'Video (*.mp4 *.mov *.mkv *.webm *.avi)'),
- 'drop': ('Перетягніть відео сюди\nабо натисніть, щоб відкрити файл', 'Drop your video here\nor click to open a file'),
+ 'drop': ('Перетягніть одне чи кілька відео сюди\nабо натисніть, щоб вибрати файли', 'Drop one or more videos here\nor click to select files'),
  'formats': ('MP4 · MOV · MKV · WebM · AVI — усе обробляється локально', 'MP4 · MOV · MKV · WebM · AVI — processed locally'),
  'file.details': ('Про файл', 'File Details'), 'file.audio': ('Звук є', 'Audio present'),
  'file.silent': ('Без звуку', 'No audio'),

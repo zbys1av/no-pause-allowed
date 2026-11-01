@@ -56,3 +56,8 @@ Fine drawing, normal cursor movement and gradual strokes do not become purple
 just because their changes are small. Review flags require an explicit conflict
 or a brief local event surrounded by long stillness on both sides.
 Tooltips show exactly how much of a segment needs review.
+
+Кілька відео: виберіть файли разом або додайте через «Додати відео».
+Задайте порядок кнопками ↑/↓, натисніть «Аналізувати всі».
+В експорті виберіть один спільний MP4 або окремі файли.
+Єдине джерело portable-збірок — main; готовий ZIP — у GitHub Releases.

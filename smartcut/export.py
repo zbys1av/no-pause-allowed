@@ -18,14 +18,15 @@ def tempo(speed):
 
 
 def export(video, plan, destination, job, progress=lambda *_: None,
-           crf=23, mute=False, preview=False, encoder="libx264"):
+           crf=23, mute=False, preview=False, encoder="libx264", canvas=None, force_audio=False,
+           intermediate=False):
     validate_plan(plan, video.duration)
     destination = Path(destination).absolute()
     if destination.resolve() == video.path.resolve():
         raise AppError("error.original")
     if destination.exists():
         raise AppError("error.exists")
-    if destination.suffix.lower() != ".mp4":
+    if destination.suffix.lower() != (".mov" if intermediate else ".mp4"):
         raise AppError("error.mp4")
     if crf not in (18, 23, 28) or encoder not in ("libx264", "h264_nvenc", "h264_qsv", "h264_amf"):
         raise AppError("error.encoder")
@@ -37,7 +38,7 @@ def export(video, plan, destination, job, progress=lambda *_: None,
     with tempfile.TemporaryDirectory(prefix="smartcut-", dir=destination.parent) as directory:
         temp = Path(directory)
         done = 0.
-        audio = video.audio and not mute
+        audio = (video.audio or force_audio) and not mute
         for i, s in enumerate(kept):
             job.check()
             speed = s.speed if s.action == "speed" else 1
@@ -45,6 +46,10 @@ def export(video, plan, destination, job, progress=lambda *_: None,
             if preview:
                 vf += ",scale=w='min(1280,iw)':h=-2"
             # yuv420 H.264 requires even dimensions. Pad at most one pixel, never crop.
+            if canvas:
+                width,height=canvas
+                vf += (f",scale=trunc(iw*sar/2)*2:ih,setsar=1,scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+                       f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30")
             vf += ",pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p"
             args = [tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
                     "-filter_threads", "2", "-filter_complex_threads", "2",
@@ -68,13 +73,15 @@ def export(video, plan, destination, job, progress=lambda *_: None,
                 args += ["-global_quality", str(crf)]
             else:
                 args += ["-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf)]
-            if audio:
+            if audio and video.audio:
                 audio_speed = f",{tempo(speed)}" if speed != 1 else ""
                 graph = ("[0:a:0]aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo[a];"
                          "[1:a:0][a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
                          f"asetpts=PTS-STARTPTS{audio_speed},apad[outa]")
                 args += ["-filter_complex", graph, "-map", "[outa]",
                          "-ac", "2", "-c:a", "pcm_s16le"]
+            elif audio:
+                args += ["-map", "1:a:0", "-ac", "2", "-c:a", "pcm_s16le"]
             else:
                 args += ["-an"]
             # MOV carries explicit decode timing for H.264 and supports PCM.
@@ -90,8 +97,10 @@ def export(video, plan, destination, job, progress=lambda *_: None,
         manifest.write_text("".join(f"file 'part{i}.mov'\nduration {s.output_duration:.9f}\n" for i, s in enumerate(kept)), encoding="utf-8")
         args = [tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
                 "-f", "concat", "-safe", "1", "-i", str(manifest), "-map", "0:v:0", "-c:v", "copy"]
-        args += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"] if audio else ["-an"]
-        pending = temp / "output.mp4"
+        if audio:
+            args += ["-map", "0:a:0", "-c:a", "pcm_s16le"] if intermediate else ["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"]
+        else:args += ["-an"]
+        pending = temp / ("output.mov" if intermediate else "output.mp4")
         args += ["-t", f"{total:.9f}", "-movflags", "+faststart", "-progress", "pipe:1", str(pending)]
         run(args, job, total, lambda f, stage: progress(.9+.1*f, stage), Text("stage.finalizing"))
         job.check()

@@ -70,3 +70,6 @@ Tooltips show exactly how much of a segment needs review.
 Задайте порядок кнопками ↑/↓, натисніть «Аналізувати всі».
 В експорті виберіть один спільний MP4 або окремі файли.
 Єдине джерело portable-збірок — main; готовий ZIP — у GitHub Releases.
+
+Builds and tests run locally from main using scripts/build_windows.ps1.
+Verified archives are uploaded manually to GitHub Releases; GitHub Actions is not used.

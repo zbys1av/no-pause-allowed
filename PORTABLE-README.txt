@@ -1,4 +1,4 @@
-Smart Video Cutter 1.4 — Windows 10/11 x64 Portable
+Smart Video Cutter 1.5 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -37,3 +37,8 @@ not the video or audio. Technical errors and the filename may identify files.
 Small regularly repeating interface blinks are recognized from matching pixel
 states. Growing strokes remain protected. Set Motion Debouncing to 0 to
 retain such animations. Reanalyze old videos to collect the new evidence.
+
+Adaptive analysis is enabled by default. Every base sample is still checked;
+full audits become less frequent after confirmed stillness. Any possible change
+restores base precision. Advanced Settings can disable it for comparison.
+Analysis Details and diagnostic reports show full-check / fast-guard counts.

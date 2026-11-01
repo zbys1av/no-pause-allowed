@@ -2,6 +2,10 @@
 from dataclasses import dataclass, field
 
 CATALOG = {
+ 'enabled': ('Увімкнено', 'Enabled'), 'disabled': ('Вимкнено', 'Disabled'),
+ 'adaptive': ('Адаптивний аналіз', 'Adaptive analysis'),
+ 'adaptive.help': ('На нерухомих ділянках повна перевірка виконується рідше. Проміжні кадри перевіряються швидким захистом; можлива зміна одразу повертає базовий крок. Вимкніть для порівняння зі звичайним аналізом.', 'Runs full checks less often in still sections. Every intervening sample passes a fast safety check; any possible change immediately restores the base step. Disable to compare with fixed analysis.'),
+ 'details.performance': ('Повних перевірок: {full} із {total}; швидко підтверджено нерухомість: {fast}', 'Full checks: {full} of {total}; stillness certified by fast guard: {fast}'),
  'debug.save': ('Зберегти звіт', 'Save debug report'),
  'debug.help': ('Зберігає ZIP з параметрами, рішеннями, часовими оцінками та помилками. Без відео й звуку. Надішліть цей файл для діагностики.', 'Save a ZIP with settings, decisions, sample scores and errors. No video or audio. Share this file for investigation.'),
  'state.report': ('Зберігаємо діагностичний звіт', 'Saving diagnostic report'),

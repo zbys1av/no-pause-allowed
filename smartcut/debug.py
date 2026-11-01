@@ -28,6 +28,7 @@ class Journal:
 
 
 REASONS = {
+    'certified_quiet': 'All RGB pixels certified below the detector thresholds against both the previous frame and the idle anchor; full audit safely skipped.',
     'merged_transient': 'Short interior cursor/return burst confirmed by pixels; merged by debounce.',
     'repeated_local_cycle': 'At least three matching repetitions of small local before/after pixel states at a regular cadence; treated as an interface animation, not accumulating ink.',
     'background_changed': 'Scene changed outside the repeating patch; earlier burst classification revoked to protect drawing.',
@@ -69,11 +70,13 @@ def snapshot(window):
         journal=list(window.journal.events), journal_events_dropped=max(0,window.journal.total-len(window.journal.events)),
         last_operation={k:v for k,v in window.last_job_debug.items() if k!='samples'}, reasons=REASONS,
         last_analysis_attempt={k:v for k,v in window.last_analysis_debug.items() if k!='samples'},
+        analysis_performance=window.last_analysis_debug.get('performance',{}),
         sample_semantics='A moving sample marks the interval since the preceding timestamp. Last active sample extends to video end.',
         detector_rules=dict(pixel_threshold='max(4,16-sensitivity*0.12)',
             motion='Coherent adjacent changed pixels OR strong pixels; at sensitivity >=90 one strong pixel is enough.',
             chroma='Chroma uses 3x pixel threshold; tiny global RGB offsets <=2 are compensated.',
             debouncing='Only interior runs <= debounce with all samples transient and none persistent are suppressed.',
+            adaptive_guard='All base samples checked; exact equality to the previously checked frame, or every channel delta <= floor(pixel_threshold-2) against previous and anchor, certifies inactivity. Audit stride doubles after four quiet audits up to the configured sample/time cap; possible change restores base precision. Confirmed transient bursts can resume the preceding idle stride.',
             transient='No significant net change, small translated opposite pixel shapes, or confirmed repeated local pixel states. Heuristic, not semantic recognition.',
             local_cycles=dict(max_pixels=64,max_extent=32,max_burst_s=.5,minimum_repetitions=3,
                 max_phase_events=3,min_event_period_s=.25,max_event_period_s=5,pixel_tolerance=2,
@@ -163,6 +166,7 @@ def write_report(captured, destination, job, progress=lambda *_:None):
                             persistent=getattr(s,'persistent',s[4] if isinstance(s,list) and len(s)>4 else False)
                             kept=bool(stable[i][2]) if stable is not None else ''
                             reason='merged_transient' if active and kept is False else 'lasting_change' if persistent else 'movement_preserved' if active else 'below_motion_threshold'
+                            if getattr(s,'evidence','')=='certified_quiet':reason='certified_quiet'
                             writer.writerow([t,score,int(active),int(transient),int(persistent),kept,reason,getattr(s,'evidence',''),json.dumps(getattr(s,'bounds',None))])
             archive.writestr('README.txt','Smart Video Cutter diagnostic report / Діагностичний звіт\n'
                 'Надішліть увесь ZIP для аналізу. Send this whole ZIP for investigation.\n'

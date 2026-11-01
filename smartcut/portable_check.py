@@ -51,6 +51,19 @@ def check(report_path):
                 raise RuntimeError(result.stderr.decode(errors="replace"))
             video = probe(source)
             settings = Settings()
+            from .adaptive import AdaptiveAnalysis
+            from .motion import MotionTracker
+            import numpy as np
+            adaptive=AdaptiveAnalysis(MotionTracker(95),settings,30)
+            fixed=MotionTracker(95)
+            for i in range(160):
+                frame=np.full((100,160,3),200,np.uint8)
+                if i==82:frame[40:44,50:54]=20
+                if i>=110:frame[70,90]=20
+                adaptive.add(i/8,frame);fixed.add(i/8,frame)
+            key=lambda s:(s.time,s.score,s.active,s.transient,s.persistent,s.bounds)
+            if [key(s) for s in adaptive.tracker.samples]!=[key(s) for s in fixed.samples] or adaptive.stats['certified_quiet']<40:
+                raise RuntimeError('Packaged adaptive analysis differs from fixed decisions or fails to accelerate idle frames')
             # Exercise the two-pixel/2-second tail regression in frozen NumPy.
             import numpy as np
             from .motion import MotionTracker
@@ -118,7 +131,8 @@ def check(report_path):
                 raise RuntimeError("The packaged Qt player did not decode a video frame: " + player_error)
             report.update(ok=True, analysis_samples=len(samples), output_duration=output.duration,
                           audio=True, decoded_video_frame=True, version=__version__,
-                          localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True, local_cycles=True)
+                          localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True, local_cycles=True,
+                          adaptive_analysis=True,adaptive_certified_quiet=adaptive.stats['certified_quiet'])
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

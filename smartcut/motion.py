@@ -13,6 +13,7 @@ from .errors import AppError
 from .i18n import Text
 from dataclasses import replace
 from .repetition import LocalCycles
+from .adaptive import AdaptiveAnalysis
 
 
 def change_masks(previous, current, sensitivity):
@@ -116,6 +117,13 @@ class MotionTracker:
         _,moving,_=significant_pixels(changed,strong,self.sensitivity)
         return not moving
 
+    def add_certified_quiet(self, timestamp, frame):
+        """Only AdaptiveAnalysis may call after proving an inactive zero-score sample."""
+        assert self.burst_start is None and self.samples and not self.samples[-1].active
+        if self.quiet_start is None:self.quiet_start=len(self.samples)
+        self.samples.append(MotionSample(timestamp,0.,False,evidence='certified_quiet'))
+        self.previous=frame
+
     def add(self, timestamp, frame):
         if self.previous is None:
             self.samples.append(MotionSample(timestamp, 0., False))
@@ -192,7 +200,10 @@ def analyze(video, settings, job, progress=lambda *_: None):
     timestamps = queue.Queue()
     errors = deque(maxlen=30)
     tracker = MotionTracker(settings.sensitivity)
+    engine = AdaptiveAnalysis(tracker,settings,video.fps)
     job.debug_samples = tracker.samples
+    job.debug_analysis_performance = engine.stats
+    analysis_started=time.perf_counter()
     frame_bytes = width*height*3
     last_progress = -math.inf
     pattern = re.compile(r"\bn:\s*\d+.*?pts_time:([\d.eE+\-]+)")
@@ -220,7 +231,7 @@ def analyze(video, settings, job, progress=lambda *_: None):
             if timestamp is None:
                 raise AppError("error.frame")
             current = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 3)
-            tracker.add(timestamp, current)
+            engine.add(timestamp, current)
             now = time.monotonic()
             if now-last_progress >= .08:
                 progress(min(.999, timestamp/video.duration), Text("stage.analysis"))
@@ -233,4 +244,5 @@ def analyze(video, settings, job, progress=lambda *_: None):
     if not tracker.samples:
         raise AppError("error.frames")
     progress(1., Text("stage.analysis_complete"))
+    engine.stats['elapsed_s']=time.perf_counter()-analysis_started
     return tracker.samples

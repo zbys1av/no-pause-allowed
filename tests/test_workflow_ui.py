@@ -71,6 +71,12 @@ def test_presets_simple_mode_and_live_localization():
     window.set_language('uk')
     assert window.preview_mode.itemText(1) == 'Після монтажу'
     assert window.minimum.suffix() == ' с'
+    assert window.adaptive.isChecked()
+    assert window.rows['adaptive'].help.text()
+    window.adaptive.setChecked(False)
+    assert not window.settings().adaptive and window.dirty
+    window.rows['adaptive'].reset.click()
+    assert window.settings().adaptive and not window.dirty
     window.close()
     app.processEvents()
 

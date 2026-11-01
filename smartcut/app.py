@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt,QTimer,QUrl
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,
     QLabel,QPushButton,QComboBox,QSlider,QDoubleSpinBox,QProgressBar,QScrollArea,QSplitter,
     QTableWidget,QTableWidgetItem,QAbstractItemView,QHeaderView,QFileDialog,QMessageBox,
-    QDialog,QFormLayout,QFrame)
+    QDialog,QFormLayout,QFrame,QCheckBox)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput
 from . import __version__
 from .model import Settings,analyze_plan,move_boundary,statistics,detection_statistics
@@ -156,11 +156,13 @@ class Window(QMainWindow):
         self.add_setting(settings_layout,'mode',self.mode,lambda:self.mode.setCurrentIndex(0))
         self.advanced=Fold('advanced');settings_layout.addWidget(self.advanced)
         self.padding=self.spin(0,2,.6);self.debounce=self.spin(0,2,.3);self.frequency=self.spin(1,12,8,1)
+        self.adaptive=QCheckBox();self.bindings.append((self.adaptive,'setText','enabled'))
         self.detail=QComboBox();self.detail.addItems(['320 px','640 px','960 px','1280 px']);self.detection=QComboBox();self.speed=QComboBox();self.speed.addItems(['2×','5×','10×','20×']);self.speed.setCurrentIndex(1)
         for key,widget,reset in (
             ('padding',self.padding,lambda:self.padding.setValue(self.defaults().padding)),
             ('debounce',self.debounce,lambda:self.debounce.setValue(self.defaults().debounce)),
             ('fps',self.frequency,lambda:self.frequency.setValue(self.defaults().sample_fps)),
+            ('adaptive',self.adaptive,lambda:self.adaptive.setChecked(self.defaults().adaptive)),
             ('detail',self.detail,lambda:self.detail.setCurrentIndex((320,640,960,1280).index(self.defaults().analysis_width))),
             ('area',self.detection,lambda:self.reset_area()),('speed',self.speed,lambda:self.speed.setCurrentIndex(1))):self.add_setting(self.advanced.content,key,widget,reset)
         self.area_label=QLabel();self.area_label.setWordWrap(True);self.advanced.content.addWidget(self.area_label)
@@ -172,6 +174,7 @@ class Window(QMainWindow):
         self.cancel=self.button('cancel',self.cancel_job,'x');footer.addWidget(self.cancel);layout.addLayout(footer)
         self.sensitivity_label=self.rows['sensitivity'].name
         self.profile.currentIndexChanged.connect(self.apply_profile)
+        self.adaptive.toggled.connect(self.analysis_changed)
         for widget in (self.sensitivity,self.frequency,self.detail):
             (widget.valueChanged if hasattr(widget,'valueChanged') else widget.currentIndexChanged).connect(self.analysis_changed)
         for widget in (self.minimum,self.padding,self.debounce):widget.valueChanged.connect(self.temporal_changed)
@@ -185,18 +188,19 @@ class Window(QMainWindow):
 
     def settings(self):
         return Settings(self.sensitivity.value(),self.minimum.value(),self.padding.value(),self.frequency.value(),self.area,
-                        (320,640,960,1280)[self.detail.currentIndex()],self.debounce.value())
+                        (320,640,960,1280)[self.detail.currentIndex()],self.debounce.value(),self.adaptive.isChecked())
 
     def speed_value(self):return (2,5,10,20)[self.speed.currentIndex()]
 
     @staticmethod
-    def signature(settings,area_mode):return (settings.sensitivity,settings.sample_fps,settings.analysis_width,settings.area,area_mode)
+    def signature(settings,area_mode):return (settings.sensitivity,settings.sample_fps,settings.analysis_width,settings.area,area_mode,settings.adaptive)
 
     def apply_profile(self,index):
         if self.worker:return
         self._updating=True;settings=PROFILES[('drawing','screen','general')[max(0,index)]]
         self.sensitivity.setValue(int(settings.sensitivity));self.minimum.setValue(settings.min_idle);self.padding.setValue(settings.padding)
         self.debounce.setValue(settings.debounce);self.frequency.setValue(settings.sample_fps);self.detail.setCurrentIndex((320,640,960,1280).index(settings.analysis_width))
+        self.adaptive.setChecked(settings.adaptive)
         self.mode.setCurrentIndex(0);self.speed.setCurrentIndex(1)
         self.area=(0,0,1,1);self.detection.setCurrentIndex(0);self.view.outline.hide();self._updating=False
         self.update_defaults();self.analysis_changed()
@@ -205,7 +209,7 @@ class Window(QMainWindow):
         d=self.defaults()
         for key,value in {'sensitivity':f'{d.sensitivity:g}%', 'minimum':f'{d.min_idle:g} '+self.t('unit.seconds'), 'mode':Text('mode.remove'),
             'padding':f'{d.padding:g} '+self.t('unit.seconds'),'debounce':f'{d.debounce:g} '+self.t('unit.seconds'),'fps':f'{d.sample_fps:g}','detail':f'{d.analysis_width} px',
-            'area':Text('area.full'),'speed':'5×'}.items():self.rows[key].default=value;self.rows[key].translate(self.language)
+            'area':Text('area.full'),'speed':'5×','adaptive':Text('enabled' if d.adaptive else 'disabled')}.items():self.rows[key].default=value;self.rows[key].translate(self.language)
 
     def analysis_changed(self,*_):
         if self._updating:return
@@ -354,6 +358,7 @@ class Window(QMainWindow):
         old=self.worker;self.worker=None
         if old and self.operation_kind!='report':
             self.last_job_debug=dict(kind=self.operation_kind,state=self.workflow.state.value,settings=self.operation_settings,input_video=self.operation_video,commands=old.job.debug_commands,
+                                     performance=getattr(old.job,'debug_analysis_performance',{}),
                                      samples=list(getattr(old.job,'debug_samples',[])) if self.workflow.state in (State.ANALYSIS_FAILED,State.ANALYSIS_CANCELLED) else [])
             if self.operation_kind=='analysis':self.last_analysis_debug=self.last_job_debug
         if old:old.deleteLater()
@@ -424,6 +429,10 @@ class Window(QMainWindow):
                 ('details.short',report.rejected_short),('details.padding',report.lost_to_padding),
                 ('details.bursts',report.merged_bursts),('details.remove',clock(st['removed'])))))
             if st['sections']==0:self.details_text.setText(self.details_text.text()+'\n'+self.t('details.reason',reason=message))
+            performance=self.last_analysis_debug.get('performance',{})
+            if performance.get('frames') and self.last_analysis_debug.get('state')==State.ANALYSIS_COMPLETE.value:
+                self.details_text.setText(self.details_text.text()+'\n'+self.t('details.performance',
+                    full=performance['full_checks'],total=performance['frames'],fast=performance['certified_quiet']))
             top='\n'.join(f'{clock(a)} → {clock(b)} · {clock(b-a)}' for a,b in report.top_five)
             self.top_pauses.setText(self.t('details.top')+'\n'+(top or self.t('details.none')))
 

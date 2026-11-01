@@ -26,7 +26,8 @@ def check(report_path):
             base / "tools", internal, internal / "PySide6", internal / "shiboken6",
             Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32"))
         for key in ("SMARTCUT_FFMPEG", "SMARTCUT_FFPROBE"):
-            os.environ.pop(key, None)
+            # Portable must ignore development overrides as well as system PATH.
+            os.environ[key] = str(base / 'absent-external-tools' / key)
         for name in ("ffmpeg", "ffprobe"):
             executable = Path(tool(name))
             if executable.parent != base / "tools":
@@ -178,7 +179,8 @@ def check(report_path):
                           audio=True, decoded_video_frame=True, version=__version__,
                           localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True, local_cycles=True,
                           adaptive_analysis=True,adaptive_certified_quiet=adaptive.stats['certified_quiet'],parallel_analysis=True,
-                          review_annotations=True,long_motion_evidence=True,selective_review=True,multi_video_export=True)
+                          review_annotations=True,long_motion_evidence=True,selective_review=True,multi_video_export=True,
+                          standalone_runtime=True)
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

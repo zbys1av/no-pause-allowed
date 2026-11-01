@@ -54,9 +54,13 @@ class Job:
 def tool(name):
     variable = "SMARTCUT_" + name.upper()
     explicit = os.environ.get(variable)
-    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    frozen = getattr(sys, "frozen", False)
+    base = Path(sys.executable).parent if frozen else Path(__file__).resolve().parent.parent
     filename = name + (".exe" if os.name == "nt" else "")
-    options = [explicit] if explicit else [str(base / "tools" / filename), shutil.which(name)]
+    bundled = str(base / "tools" / filename)
+    # A shipped portable folder owns its dependencies. Machine-wide tools and
+    # developer overrides must never hide an incomplete or damaged package.
+    options = [bundled] if frozen else ([explicit] if explicit else [bundled, shutil.which(name)])
     for option in options:
         if option and Path(option).is_file():
             return str(option)

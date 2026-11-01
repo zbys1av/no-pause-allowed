@@ -7,7 +7,7 @@
   "output_duration": 3.0,
   "audio": true,
   "decoded_video_frame": true,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "localized_ui": true,
   "svg_icons": true,
   "simple_mode": true,
@@ -15,5 +15,7 @@
   "local_cycles": true,
   "adaptive_analysis": true,
   "adaptive_certified_quiet": 124,
-  "parallel_analysis": true
+  "parallel_analysis": true,
+  "review_annotations": true,
+  "long_motion_evidence": true
 }

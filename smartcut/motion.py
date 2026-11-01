@@ -1,5 +1,5 @@
 """Streaming RGB analysis with sparse-motion and gradual-stroke protection."""
-from collections import deque, OrderedDict
+from collections import deque
 from typing import NamedTuple
 import queue
 import re
@@ -145,8 +145,9 @@ class MotionTracker:
         self.cycles = LocalCycles(self.same_background)
         self.burst_bounds = None
         self.burst_cycle_candidate = False
-        self.observed_pixels=OrderedDict()
-        self.observed_masks=OrderedDict()
+        self.background_coverage={}
+        self.burst_pixels=None
+        self.burst_direct=True
         self.cycle_stats=dict(background_checks=0,unexplained_changes=0,explained_changes=0,events=[])
 
     def same_background(self, before, after, region, after_index=None):
@@ -159,25 +160,9 @@ class MotionTracker:
             # A later, already recorded scene event must not turn the preceding
             # 18 seconds of a proved clock blink back into user activity.
             # Require exact sparse pixel coverage, not merely nearby rectangles.
-            history=self.cycles.locations.get(region,())
-            first=history[0].begin if history else len(self.samples)
-            first=max(first,self.cycles.background_indices.get(region,-1)+1)
-            clock={i for event in history for i in range(event.begin,event.stop)}
-            seen=set()
-            for i,points in self.observed_pixels.items():
-                if i<first or i in clock:continue
-                sample=self.samples[i]
-                if sample.active and sample.persistent and not sample.transient and sample.evidence!='accumulated_change':seen.update(points)
             target=np.packbits(pixels)
-            covered=np.zeros_like(target)
-            if seen:
-                indices=np.fromiter((y*pixels.shape[1]+x for x,y in seen),dtype=np.int64)
-                np.bitwise_or.at(covered,indices//8,(1<<(7-indices%8)).astype(np.uint8))
-            for i,bitmap in self.observed_masks.items():
-                if i<first or i in clock:continue
-                sample=self.samples[i]
-                if sample.active and sample.persistent and not sample.transient and sample.evidence!='accumulated_change':
-                    np.bitwise_or(covered,np.frombuffer(bitmap,np.uint8),out=covered)
+            anchor,covered=self.background_coverage.get(region,(None,None))
+            if anchor is not before:covered=np.zeros_like(target)
             explained=not np.any(target & ~covered)
             self.cycle_stats['explained_changes' if explained else 'unexplained_changes']+=1
             if len(self.cycle_stats['events'])<128:
@@ -188,8 +173,32 @@ class MotionTracker:
                 # pixels would look unexplained when it leaves the history.
                 self.cycles.backgrounds[region]=after
                 self.cycles.background_indices[region]=len(self.samples) if after_index is None else after_index
+                self.background_coverage.pop(region,None)
                 return True
+        else:
+            # A directly observed event which has returned to the baseline may
+            # not explain a later gradual change on those same pixels. Keep the
+            # original frame anchor, so subthreshold ink can still accumulate.
+            self.background_coverage.pop(region,None)
         return not moving
+
+    def record_burst_pixels(self, pair, shape):
+        if self.burst_pixels is None:self.burst_pixels=np.zeros((shape[0]*shape[1]+7)//8,np.uint8)
+        if pair.bitmap is not None:
+            np.bitwise_or(self.burst_pixels,np.frombuffer(pair.bitmap,np.uint8),out=self.burst_pixels)
+        elif pair.pixels:
+            indices=np.fromiter((y*shape[1]+x for x,y in pair.pixels),dtype=np.int64)
+            np.bitwise_or.at(self.burst_pixels,indices//8,(1<<(7-indices%8)).astype(np.uint8))
+
+    def commit_burst_pixels(self):
+        # One union bitmap per existing background, not a FIFO of frame masks.
+        # Long movement cannot evict its first scene event from the evidence.
+        self.background_coverage={k:v for k,v in self.background_coverage.items() if k in self.cycles.backgrounds}
+        for region,anchor in self.cycles.backgrounds.items():
+            old,mask=self.background_coverage.get(region,(None,None))
+            if old is not anchor:mask=np.zeros_like(self.burst_pixels)
+            np.bitwise_or(mask,self.burst_pixels,out=mask)
+            self.background_coverage[region]=(anchor,mask)
 
     def add_certified_quiet(self, timestamp, frame):
         """Only AdaptiveAnalysis may call after proving an inactive zero-score sample."""
@@ -205,12 +214,6 @@ class MotionTracker:
             return
         pair=pair if pair is not None else prepare_pair(self.previous,frame,self.sensitivity)
         score,moving,bounds=pair[:3]
-        if moving and len(pair)>3 and pair[3]:
-            self.observed_pixels[len(self.samples)]=pair[3]
-            while len(self.observed_pixels)>512:self.observed_pixels.popitem(last=False)
-        if moving and len(pair)>4 and pair[4] is not None:
-            self.observed_masks[len(self.samples)]=pair[4]
-            while len(self.observed_masks)>32:self.observed_masks.popitem(last=False)
         accumulated = False
         if not moving:
             anchor_score, accumulated = motion_score(self.anchor, frame, self.sensitivity)
@@ -229,6 +232,9 @@ class MotionTracker:
                 self.burst_peak = 0.
                 self.burst_bounds = bounds
                 self.burst_cycle_candidate = bounds is not None
+                self.burst_pixels=None;self.burst_direct=True
+            if accumulated:self.burst_direct=False
+            else:self.record_burst_pixels(pair,frame.shape)
             if bounds is None or accumulated:self.burst_cycle_candidate=False
             elif self.burst_bounds is not None:
                 a,b,c,d=self.burst_bounds;x,y,u,v=bounds
@@ -245,10 +251,13 @@ class MotionTracker:
             for i in range(self.burst_start, len(self.samples)):
                 self.samples[i] = replace(self.samples[i], transient=bool(transient), persistent=not transient,
                     evidence='cursor_or_return' if transient else self.samples[i].evidence or 'unconfirmed_change')
+            if not transient and self.burst_direct and self.burst_pixels is not None:self.commit_burst_pixels()
             if self.burst_cycle_candidate:
                 begin=self.burst_start
                 matches=self.cycles.observe(self.burst_bounds,self.burst_reference,frame,
                     self.samples[begin-1].time if begin else 0.,self.samples[-1].time,begin,len(self.samples))
+                self.background_coverage={k:v for k,v in self.background_coverage.items()
+                                          if self.cycles.backgrounds.get(k) is v[0]}
                 for event in self.cycles.invalidated:
                     for i in range(event.begin,event.stop):
                         self.samples[i]=replace(self.samples[i],transient=False,persistent=True,evidence='background_changed')
@@ -256,6 +265,7 @@ class MotionTracker:
                     for i in range(event.begin,event.stop):
                         self.samples[i]=replace(self.samples[i],transient=True,persistent=False,evidence='repeated_local_cycle')
             self.burst_start = self.burst_reference = None
+            self.burst_pixels=None
         self.samples.append(MotionSample(timestamp, score, moving, persistent=accumulated,
             evidence='accumulated_change' if accumulated else 'adjacent_change' if moving else 'below_threshold',bounds=bounds))
         self.previous = frame

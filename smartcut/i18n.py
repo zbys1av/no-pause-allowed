@@ -2,6 +2,13 @@
 from dataclasses import dataclass, field
 
 CATALOG = {
+ 'review.summary': ('Потребує перевірки: {time}. Фіолетове штрихування позначає неоднозначні зміни; поточні дії монтажу збережено.', 'Review needed: {time}. Purple hatching marks ambiguous changes; current editing actions are retained.'),
+ 'review.tip': ('Потребує перевірки: {reasons}\nПерегляньте оригінал і за потреби змініть дію сегмента.', 'Review needed: {reasons}\nPreview the original and change the segment action if needed.'),
+ 'review.small_change': ('Дрібні зміни: можливі штрихи, курсор або шум запису', 'Small changes: possible strokes, cursor or recording noise'),
+ 'review.background_conflict': ('Зміна фону суперечить розпізнаному миготінню', 'Background change conflicts with recognized blinking'),
+ 'review.gradual_change': ('Слабка зміна, виявлена лише накопиченням', 'Faint change detected through accumulation'),
+ 'review.missing_evidence': ('Недостатньо піксельних доказів для однозначного висновку', 'Insufficient pixel evidence for a clear conclusion'),
+ 'review.unfinished_motion': ('Рух наприкінці запису без перевірки завершення', 'Motion at the end without a completed return check'),
  'performance': ('Продуктивність', 'Performance'),
  'workers': ('Паралельний аналіз', 'Parallel Analysis'),
  'workers.auto': ('Авто', 'Auto'),
@@ -79,7 +86,7 @@ CATALOG = {
  'metric.raw_help': ('Сума нерухомих інтервалів на рівні кадрів, ще до часової фільтрації.', 'Frame-level still time, before temporal stabilization.'),
  'metric.pause_help': ('Безперервні паузи після фільтрації сплесків і перевірки мінімальної тривалості, до запасу.', 'Continuous pauses after burst filtering and minimum length, before padding.'),
  'metric.removed_help': ('Реальні сегменти «Видалити» після запасу й ручних правок. При прискоренні цей час може бути нульовим.', 'Actual Remove sections after padding and manual edits. This may be zero in speed-up mode.'),
- 'result.changed': ('План містить реальні зміни. Перевірте перегляд перед експортом.', 'The plan contains real edits. Preview before exporting.'),
+ 'result.changed': ('Монтажний план готовий. Перевірте перегляд перед експортом.', 'The editing plan is ready. Preview before exporting.'),
  'result.none': ('Знайдено {idle} моментів без суттєвого руху, але вони розділені рухами або коротші за мінімальну паузу.', 'Found {idle} of little/no movement, but those moments are separated by movement or shorter than the minimum pause.'),
  'result.padding': ('Знайдені паузи повністю перекриті запасом біля руху. Зменште запас у розширених параметрах.', 'Detected pauses are fully covered by motion padding. Reduce padding in Advanced Settings.'),
  'result.manual': ('Після ручних рішень усі ділянки залишаються без змін.', 'Manual decisions now keep every section unchanged.'),
@@ -103,7 +110,7 @@ CATALOG = {
  'details.top': ('П’ять найдовших пауз після стабілізації', 'Five longest stabilized still intervals'),
  'details.graph': ('Інтенсивність змін у часі (відносна шкала)', 'Change intensity over time (relative scale)'),
  'details.none': ('Інтервалів немає.', 'No intervals.'),
- 'legend': ('Зелений — залишити    Червоний — видалити    Жовтий — прискорити', 'Green — keep    Red — remove    Yellow — speed up'),
+ 'legend': ('Зелений — залишити · Червоний — видалити · Жовтий — прискорити\nФіолетове штрихування — потребує перевірки; нижня смуга показує дію', 'Green — keep · Red — remove · Yellow — speed up\nPurple hatching — review needed; the bottom strip shows the action'),
  'keep': ('Залишити', 'Keep'), 'remove': ('Видалити', 'Remove'), 'speed_up': ('Прискорити', 'Speed Up'),
  'segment.tip': ('{start} → {end}\nТривалість: {duration}\nДія: {action}', '{start} → {end}\nDuration: {duration}\nAction: {action}'),
  'segment.selected': ('Обрана ділянка: {start} → {end}', 'Selected section: {start} → {end}'),

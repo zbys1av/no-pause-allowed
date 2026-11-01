@@ -57,14 +57,17 @@ class LocalCycles:
         events=list(history)
         for lag in (1,2,3):
             if len(events)<3*lag:continue
-            recent=events
-            if recent[-1].end-recent[0].start<1.:continue
-            gaps=np.diff([e.start for e in recent])
-            period=float(np.median(gaps))
-            if not .25 <= period <= 5 or np.max(np.abs(gaps-period)) > max(.15,period*.12):continue
-            if all(abs(recent[i].end-recent[i].start-(recent[i-lag].end-recent[i-lag].start))<=.15
-                   and self.same(recent[i].before,recent[i-lag].before)
-                   and self.same(recent[i].after,recent[i-lag].after)
-                   for i in range(lag,len(recent))):
-                return recent
+            # An interruption must not require nine new events before a valid
+            # three-repetition suffix can be recognized again.
+            for start in range(len(events)-3*lag+1):
+                recent=events[start:]
+                if recent[-1].end-recent[0].start<1.:continue
+                gaps=np.diff([e.start for e in recent])
+                period=float(np.median(gaps))
+                if not .25 <= period <= 5 or np.max(np.abs(gaps-period)) > max(.15,period*.12):continue
+                if all(abs(recent[i].end-recent[i].start-(recent[i-lag].end-recent[i-lag].start))<=.15
+                       and self.same(recent[i].before,recent[i-lag].before)
+                       and self.same(recent[i].after,recent[i-lag].after)
+                       for i in range(lag,len(recent))):
+                    return recent
         return []

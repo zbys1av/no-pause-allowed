@@ -6,6 +6,7 @@ import sys
 import tempfile
 import uuid
 from PySide6.QtCore import Qt,QTimer,QUrl
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,
     QLabel,QPushButton,QComboBox,QSlider,QDoubleSpinBox,QProgressBar,QScrollArea,QSplitter,
     QTableWidget,QTableWidgetItem,QAbstractItemView,QHeaderView,QFileDialog,QMessageBox,
@@ -13,7 +14,8 @@ from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBo
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput
 from . import __version__
 from .model import Settings,analyze_plan,move_boundary,statistics,detection_statistics
-from .motion import analyze
+from .motion import analyze,analysis_dimensions
+from .review import review_spans,review_reasons
 from .video import probe
 from .export import export,proxy
 from .progress import AnalysisEstimate
@@ -122,7 +124,7 @@ class Window(QMainWindow):
         result.addWidget(self.suggestions)
         self.timeline_legend=self.text('legend','muted');self.timeline=Timeline();self.timeline.selected.connect(self.select_segment)
         self.selected_box=QWidget();selected=QHBoxLayout(self.selected_box);selected.setContentsMargins(0,0,0,0)
-        self.selected_label=QLabel();selected.addWidget(self.selected_label,1)
+        self.selected_label=QLabel();self.selected_label.setWordWrap(True);selected.addWidget(self.selected_label,1)
         for key,action in (('keep','keep'),('remove','remove'),('speed_up','speed')):
             selected.addWidget(self.button(key,lambda checked=False,a=action:self.set_action(a)))
         self.selected_box.hide()
@@ -398,9 +400,16 @@ class Window(QMainWindow):
         self.replan();self.graph.set_samples(samples,self.video.duration)
 
     def render_plan(self):
-        self.timeline.set_plan(self.plan);self.table.setRowCount(len(self.plan))
+        dimensions=analysis_dimensions(self.video,self.capture_settings or self.settings()) if self.video else (0,0)
+        reviews=review_spans(self.samples,self.video.duration,dimensions[0]*dimensions[1]) if self.video else []
+        self.timeline.set_plan(self.plan,reviews);self.table.setRowCount(len(self.plan))
         for i,s in enumerate(self.plan):
-            for j,text in enumerate((clock(s.start),clock(s.end),self.t({'keep':'keep','remove':'remove','speed':'speed_up'}[s.action]))):self.table.setItem(i,j,QTableWidgetItem(text))
+            reasons=review_reasons(reviews,s.start,s.end)
+            tip=self.t('review.tip',reasons='; '.join(self.t('review.'+r) for r in reasons)) if reasons else ''
+            for j,text in enumerate((clock(s.start),clock(s.end),self.t({'keep':'keep','remove':'remove','speed':'speed_up'}[s.action]))):
+                item=QTableWidgetItem(text+(' ⚠' if reasons and j==2 else ''))
+                if reasons:item.setBackground(QColor('#43365b'));item.setToolTip(tip)
+                self.table.setItem(i,j,item)
         if self.plan:
             index=min(max(0,self.timeline.index),len(self.plan)-1);self.populate_segment(index,select=False)
         self.render()
@@ -426,6 +435,8 @@ class Window(QMainWindow):
         previous=self.workflow.state in (State.ANALYSIS_CANCELLED,State.ANALYSIS_FAILED)
         if self.plan_reset_notice:message=self.t('result.reset')+'\n'+message
         if previous:message=self.t('result.previous')+'\n'+message
+        if self.timeline.reviews:
+            message+='\n'+self.t('review.summary',time=clock(sum(s.end-s.start for s in self.timeline.reviews)))
         self.result_message.setText(message);self.result_message.setProperty('warning',self.dirty or st['sections']==0 or previous);self.result_message.style().unpolish(self.result_message);self.result_message.style().polish(self.result_message)
         self.suggestions.setVisible(st['sections']==0 and not self.dirty)
         if self.report:
@@ -498,7 +509,10 @@ class Window(QMainWindow):
         self.action.setCurrentIndex({'keep':0,'remove':1,'speed':2}[s.action])
         if select:
             self.timeline.index=index;self.timeline.update();self.table.selectRow(index);self.selected_box.show()
-            self.selected_label.setText(self.t('segment.selected',start=clock(s.start),end=clock(s.end)))
+        label=self.t('segment.selected',start=clock(s.start),end=clock(s.end))
+        reasons=review_reasons(self.timeline.reviews,s.start,s.end)
+        if reasons:label+='\n'+self.t('review.tip',reasons='; '.join(self.t('review.'+r) for r in reasons))
+        self.selected_label.setText(label)
 
     def select_segment(self,index):
         if not self.plan or self.worker:return

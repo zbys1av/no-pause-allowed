@@ -77,6 +77,18 @@ def check(report_path):
                 raise RuntimeError('Packaged local-cycle detector failed')
             if any(s.action=='keep' for s in analyze_plan(tracker.samples,18,settings).plan):
                 raise RuntimeError('Packaged detector kept the idle blinking tail')
+            long_motion=MotionTracker(95)
+            for i in range(60*8):
+                t=i/8;frame=np.full((100,200,3),200,np.uint8)
+                if int(t//2)%2:frame[30,40:42]=30
+                if t>=20.5:frame[70:90,160:190]=30
+                if 20.5<=t<46:
+                    x=60+(i%10)*6;frame[70:78,x:x+8]=30
+                long_motion.add(t,frame)
+            if any(s.evidence=='background_changed' for s in long_motion.samples):
+                raise RuntimeError('Long motion evicted its recorded scene evidence')
+            if analyze_plan(long_motion.samples,60,settings).plan[-1].action!='remove':
+                raise RuntimeError('Blink recurrence did not recover after interruption')
             samples = analyze(video, settings, Job())
             from dataclasses import replace
             parallel_job=Job()
@@ -113,6 +125,11 @@ def check(report_path):
             valid_frames = []
             window.view.item.videoSink().videoFrameChanged.connect(lambda f: valid_frames.append(f.isValid()))
             window.loaded(output)
+            from .model import MotionSample
+            window.analyzed([MotionSample(0,0,False),MotionSample(1,.0001,True,persistent=True,
+                evidence='adjacent_change',bounds=(4,4,6,5)),MotionSample(2,0,False)])
+            if not window.timeline.reviews or '⚠' not in window.table.item(0,2).text():
+                raise RuntimeError('Packaged uncertainty annotations failed')
             window.analyzed(samples)
             from .debug import snapshot, write_report
             import zipfile
@@ -139,7 +156,8 @@ def check(report_path):
             report.update(ok=True, analysis_samples=len(samples), output_duration=output.duration,
                           audio=True, decoded_video_frame=True, version=__version__,
                           localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True, local_cycles=True,
-                          adaptive_analysis=True,adaptive_certified_quiet=adaptive.stats['certified_quiet'],parallel_analysis=True)
+                          adaptive_analysis=True,adaptive_certified_quiet=adaptive.stats['certified_quiet'],parallel_analysis=True,
+                          review_annotations=True,long_motion_evidence=True)
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

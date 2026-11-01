@@ -13,6 +13,7 @@ import time
 import zipfile
 from . import __version__
 from .model import stabilize, activity_intervals, statistics
+from .review import review_spans,overlapping_reviews,sample_review_reasons
 
 
 class Journal:
@@ -28,6 +29,11 @@ class Journal:
 
 
 REASONS = {
+    'background_conflict': 'Background guard conflicts with the local-cycle interpretation; inspect source pixels.',
+    'small_change': 'Small visual change could be ink, cursor, interface or codec noise; retained conservatively, needs review.',
+    'gradual_change': 'Accumulated faint change, not semantic recognition; needs review.',
+    'missing_evidence': 'No conclusive visual evidence available; needs review.',
+    'unfinished_motion': 'Final active burst has no subsequent frame to confirm its end; needs review.',
     'certified_quiet': 'Previous-pair evidence and the checked idle anchor certify the same zero-score inactive sample; ordered tracker work safely skipped.',
     'merged_transient': 'Short interior cursor/return burst confirmed by pixels; merged by debounce.',
     'repeated_local_cycle': 'At least three matching repetitions of small local before/after pixel states at a regular cadence; treated as an interface animation, not accumulating ink.',
@@ -85,6 +91,13 @@ def snapshot(window):
         limitations=['No media pixels included: visual classification cannot be independently verified from this report.',
                      'Partial cancelled/failed samples are not a completed analysis and must not be used as its plan.'])
     if report and video and settings:
+        from .motion import analysis_dimensions
+        width,height=analysis_dimensions(video,window.capture_settings or settings)
+        pixel_count=width*height
+        reviews=review_spans(samples,video.duration,pixel_count)
+        data['review']=dict(intervals=[asdict(s) for s in reviews],
+            seconds=sum(s.end-s.start for s in reviews),
+            semantics='Heuristic visual ambiguity, not a calibrated probability. Annotation never changes the editing action.')
         filtered, _ = stabilize(samples,video.duration,settings.debounce)
         active = activity_intervals(filtered,video.duration)
         data['stabilized_activity'] = active
@@ -126,9 +139,12 @@ def snapshot(window):
                 matches.append(dict(start=max(segment.start,auto.start),end=min(segment.end,auto.end),action=auto.action))
                 j+=1
             unchanged=index<len(window.automatic) and segment==window.automatic[index]
-            segments.append(dict(**asdict(segment),reason=('automatic_keep' if segment.action=='keep' else 'automatic_idle') if unchanged else 'manual_edit',automatic_coverage=matches))
+            overlaps=overlapping_reviews(reviews,segment.start,segment.end)
+            segments.append(dict(**asdict(segment),reason=('automatic_keep' if segment.action=='keep' else 'automatic_idle') if unchanged else 'manual_edit',automatic_coverage=matches,
+                needs_review=bool(overlaps),review_intervals=[asdict(s) for s in overlaps]))
         data['segment_decisions']=segments
-    else:filtered=samples
+    else:filtered=samples;pixel_count=0
+    data['review_pixel_count']=pixel_count
     # Remove known user directory prefixes from error text. No environment dump.
     redactions=[str(Path.home()),str(window.cache)]
     if video:redactions.extend([str(video.path),str(video.path.parent)])
@@ -157,7 +173,7 @@ def write_report(captured, destination, job, progress=lambda *_:None):
             for name,raw,stable in [('samples.csv',samples,filtered),('partial_samples.csv',partial,None)]:
                 with archive.open(name,'w') as stream:
                     with io.TextIOWrapper(stream,encoding='utf-8',newline='') as text:
-                        writer=csv.writer(text);writer.writerow(['time_s','score','raw_active','transient','persistent','stabilized_active','reason','evidence','bounds'])
+                        writer=csv.writer(text);writer.writerow(['time_s','score','raw_active','transient','persistent','stabilized_active','reason','evidence','bounds','review_reasons'])
                         for i,s in enumerate(raw):
                             if i%512==0:
                                 job.check();progress(i/max(1,len(raw)),Text('state.report'))
@@ -167,7 +183,8 @@ def write_report(captured, destination, job, progress=lambda *_:None):
                             kept=bool(stable[i][2]) if stable is not None else ''
                             reason='merged_transient' if active and kept is False else 'lasting_change' if persistent else 'movement_preserved' if active else 'below_motion_threshold'
                             if getattr(s,'evidence','')=='certified_quiet':reason='certified_quiet'
-                            writer.writerow([t,score,int(active),int(transient),int(persistent),kept,reason,getattr(s,'evidence',''),json.dumps(getattr(s,'bounds',None))])
+                            review=sample_review_reasons(s,data.get('review_pixel_count',0)) if stable is not None else ()
+                            writer.writerow([t,score,int(active),int(transient),int(persistent),kept,reason,getattr(s,'evidence',''),json.dumps(getattr(s,'bounds',None)),json.dumps(review)])
             archive.writestr('README.txt','Smart Video Cutter diagnostic report / Діагностичний звіт\n'
                 'Надішліть увесь ZIP для аналізу. Send this whole ZIP for investigation.\n'
                 'report.json: settings, intervals, decision reasons, plans, events and errors.\n'

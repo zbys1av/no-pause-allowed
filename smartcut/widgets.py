@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QWidget,QGraphicsView,QGraphicsScene,QGraphicsRec
 from pathlib import Path
 from .i18n import tr,Text
 from .icons import icon
+from .review import review_reasons
 
 
 def clock(value):
@@ -184,11 +185,11 @@ class StatCard(QFrame):
 class Timeline(QWidget):
     selected=Signal(int)
     def __init__(self):
-        super().__init__();self.plan=[];self.index=-1;self.position=0.;self.language='uk';self.ends=[]
+        super().__init__();self.plan=[];self.reviews=[];self.index=-1;self.position=0.;self.language='uk';self.ends=[]
         self.setMinimumHeight(42);self.setMouseTracking(True)
 
-    def set_plan(self,plan):
-        self.plan=list(plan);self.ends=[s.end for s in plan];self.update()
+    def set_plan(self,plan,reviews=()):
+        self.plan=list(plan);self.reviews=list(reviews);self.ends=[s.end for s in plan];self.update()
 
     def paintEvent(self,event):
         p=QPainter(self);p.fillRect(self.rect(),QColor('#242b35'))
@@ -198,6 +199,13 @@ class Timeline(QWidget):
             rect=QRectF(s.start/duration*self.width(),4,(s.end-s.start)/duration*self.width(),self.height()-8)
             p.fillRect(rect,QColor({'keep':'#4bae91','remove':'#bd6679','speed':'#c1a15c'}[s.action]))
             p.setPen(QPen(QColor('#f3f6fb' if i==self.index else '#1a2029'),2 if i==self.index else 1));p.drawRect(rect)
+        for span in self.reviews:
+            left=span.start/duration*self.width();width=max(2,(span.end-span.start)/duration*self.width())
+            # Keep a bottom strip in the action color; the purple body is a
+            # separate review status, including after a manual action change.
+            p.fillRect(QRectF(left,4,width,self.height()-12),QColor('#55416f'))
+            p.fillRect(QRectF(left,7,width,self.height()-15),QBrush(QColor('#c2a1ff'),Qt.BDiagPattern))
+            p.fillRect(QRectF(left,4,width,4),QColor('#b08aff'))
         p.setPen(QPen(QColor('#fff'),2));x=int(self.position/duration*self.width());p.drawLine(x,0,x,self.height())
 
     def at(self,x):
@@ -212,9 +220,12 @@ class Timeline(QWidget):
         index=self.at(event.position().x())
         if index is not None:
             s=self.plan[index]
-            QToolTip.showText(event.globalPosition().toPoint(),tr(self.language,'segment.tip',
+            tip=tr(self.language,'segment.tip',
                 start=clock(s.start),end=clock(s.end),duration=clock(s.end-s.start),
-                action=tr(self.language,{'keep':'keep','remove':'remove','speed':'speed_up'}[s.action])),self)
+                action=tr(self.language,{'keep':'keep','remove':'remove','speed':'speed_up'}[s.action]))
+            reasons=review_reasons(self.reviews,s.start,s.end)
+            if reasons:tip+='\n\n'+tr(self.language,'review.tip',reasons='; '.join(tr(self.language,'review.'+r) for r in reasons))
+            QToolTip.showText(event.globalPosition().toPoint(),tip,self)
 
 
 class MotionGraph(QWidget):

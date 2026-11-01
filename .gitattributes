@@ -1,0 +1,10 @@
+# Preserve the complete portable payload byte-for-byte, including on Windows.
+SmartVideoCutter.exe binary
+_internal/** binary
+tools/** binary
+licenses/** binary
+BUILD-INFO.json -text
+PORTABLE-CHECK.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+PORTABLE-README.txt -text
+THIRD_PARTY.md -text
+PORTABLE-SHA256.txt -text

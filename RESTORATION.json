@@ -1,0 +1,13 @@
+{
+  "source_commit": "1581a8967b4ae874e0b7513ad7aab997b1dd5ed4",
+  "restored_bundle_commit": "0a1ed033ba62acdf758fa64cfd7db084266287ff",
+  "version": "1.8.0",
+  "embedded_modules_matching_source": 22,
+  "payload_files_sha256_verified": 300,
+  "source_tests": {
+    "passed": 99,
+    "seconds": 42.0
+  },
+  "windows_exe_executed_this_session": false,
+  "historical_windows_report": "PORTABLE-CHECK.json"
+}

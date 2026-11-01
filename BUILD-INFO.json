@@ -1,0 +1,29 @@
+{
+  "version": "1.8.0",
+  "base_commit": "d8b44d534df8fe96a993dcc253b91932133cee2f",
+  "working_tree_changes": true,
+  "source_snapshot_sha256": "0957304b513645cedc88a56e4fa4e272658100667a38d97499f742a0a8150ec1",
+  "tested_under": "Wine 10 on Linux",
+  "self_test": {
+    "ok": true,
+    "frozen": true,
+    "ffmpeg": "ffmpeg.exe",
+    "ffprobe": "ffprobe.exe",
+    "analysis_samples": 24,
+    "output_duration": 3.0,
+    "audio": true,
+    "decoded_video_frame": true,
+    "version": "1.8.0",
+    "localized_ui": true,
+    "svg_icons": true,
+    "simple_mode": true,
+    "debug_report": true,
+    "local_cycles": true,
+    "adaptive_analysis": true,
+    "adaptive_certified_quiet": 124,
+    "parallel_analysis": true,
+    "review_annotations": true,
+    "long_motion_evidence": true,
+    "selective_review": true
+  }
+}

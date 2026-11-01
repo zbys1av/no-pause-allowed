@@ -1,2 +1,2 @@
 """Smart Video Cutter: all media stays on your machine."""
-__version__ = "1.9.0"
+__version__ = "1.8.0"

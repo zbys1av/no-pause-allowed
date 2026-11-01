@@ -1,8 +1,4 @@
-Smart Video Cutter 1.9 — Windows 10/11 x64 Portable
-
-This is the only application edition. All code and packaging come from main.
-Copy the entire SmartVideoCutter folder and run SmartVideoCutter.exe.
-The application never downloads or installs dependencies when running.
+Smart Video Cutter 1.8 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.
@@ -15,8 +11,7 @@ Do not move only the EXE out of this folder.
 
 Ukrainian is the default language. Settings switches between Ukrainian/English.
 Open Video -> choose a profile -> Analyze Video -> review -> Export Video.
-Select or drag one or more videos; Analyze All processes the entire project.
-Export can produce one combined MP4 or separate files in list order.
+Drag a video onto the drop zone or the player to open it quickly.
 Analysis shows an approximate remaining time based on its measured speed.
 Three separate statistics show raw still time, qualifying continuous pauses
 and actual removal after padding/manual edits. Analysis Details explains cuts
@@ -61,11 +56,3 @@ Fine drawing, normal cursor movement and gradual strokes do not become purple
 just because their changes are small. Review flags require an explicit conflict
 or a brief local event surrounded by long stillness on both sides.
 Tooltips show exactly how much of a segment needs review.
-
-Кілька відео: виберіть файли разом або додайте через «Додати відео».
-Задайте порядок кнопками ↑/↓, натисніть «Аналізувати всі».
-В експорті виберіть один спільний MP4 або окремі файли.
-Єдина актуальна гілка — main. Програма завжди portable.
-
-Builds and tests run locally from main using scripts/build_windows.ps1.
-Verified archives are uploaded manually to GitHub Releases; GitHub Actions is not used.

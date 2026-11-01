@@ -26,8 +26,7 @@ def check(report_path):
             base / "tools", internal, internal / "PySide6", internal / "shiboken6",
             Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32"))
         for key in ("SMARTCUT_FFMPEG", "SMARTCUT_FFPROBE"):
-            # Portable must ignore development overrides as well as system PATH.
-            os.environ[key] = str(base / 'absent-external-tools' / key)
+            os.environ.pop(key, None)
         for name in ("ffmpeg", "ffprobe"):
             executable = Path(tool(name))
             if executable.parent != base / "tools":
@@ -104,17 +103,6 @@ def check(report_path):
             output = probe(target)
             if not output.audio or abs(output.duration-statistics(plan)["output"]) > .15:
                 raise RuntimeError("Packaged export has incorrect duration or missing audio")
-            from .project import export_project
-            joined = directory / 'joined output.mp4'
-            export_project([(video,plan),(video,plan)],joined,Job())
-            joined_video = probe(joined)
-            if not joined_video.audio or abs(joined_video.duration-2*output.duration)>.2:
-                raise RuntimeError('Packaged multi-video joining failed')
-            separate = directory / 'separate'
-            separate.mkdir()
-            paths = export_project([(video,plan),(video,plan)],separate,Job(),combined=False)
-            if len(paths)!=2 or any(abs(probe(p).duration-output.duration)>.15 for p in paths):
-                raise RuntimeError('Packaged separate-file export failed')
             app = QApplication.instance() or QApplication([])
             app.setStyleSheet(STYLE)
             window = Window(language='uk', remember=False)
@@ -179,8 +167,7 @@ def check(report_path):
                           audio=True, decoded_video_frame=True, version=__version__,
                           localized_ui=True, svg_icons=True, simple_mode=True, debug_report=True, local_cycles=True,
                           adaptive_analysis=True,adaptive_certified_quiet=adaptive.stats['certified_quiet'],parallel_analysis=True,
-                          review_annotations=True,long_motion_evidence=True,selective_review=True,multi_video_export=True,
-                          standalone_runtime=True)
+                          review_annotations=True,long_motion_evidence=True,selective_review=True)
     except Exception:
         report["error"] = traceback.format_exc()
     report_path.parent.mkdir(parents=True, exist_ok=True)

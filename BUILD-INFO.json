@@ -1,8 +1,8 @@
 {
-  "version": "1.7.0",
-  "base_commit": "b7867c5662199782c6752b6552ca60c68bf61e00",
+  "version": "1.8.0",
+  "base_commit": "d8b44d534df8fe96a993dcc253b91932133cee2f",
   "working_tree_changes": true,
-  "source_snapshot_sha256": "8a15788e2e88db9e363570856592360f053b329704d1268843d52d65a757c190",
+  "source_snapshot_sha256": "0957304b513645cedc88a56e4fa4e272658100667a38d97499f742a0a8150ec1",
   "tested_under": "Wine 10 on Linux",
   "self_test": {
     "ok": true,
@@ -13,7 +13,7 @@
     "output_duration": 3.0,
     "audio": true,
     "decoded_video_frame": true,
-    "version": "1.7.0",
+    "version": "1.8.0",
     "localized_ui": true,
     "svg_icons": true,
     "simple_mode": true,
@@ -23,6 +23,7 @@
     "adaptive_certified_quiet": 124,
     "parallel_analysis": true,
     "review_annotations": true,
-    "long_motion_evidence": true
+    "long_motion_evidence": true,
+    "selective_review": true
   }
 }

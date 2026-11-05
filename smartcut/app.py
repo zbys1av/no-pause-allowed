@@ -10,11 +10,12 @@ from PySide6.QtGui import QShortcut,QKeySequence
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,
     QLabel,QPushButton,QComboBox,QSlider,QDoubleSpinBox,QProgressBar,QScrollArea,QSplitter,
     QTableView,QAbstractItemView,QHeaderView,QFileDialog,QMessageBox,
-    QDialog,QFormLayout,QFrame,QCheckBox,QToolButton,QMenu)
+    QDialog,QFormLayout,QFrame,QCheckBox,QToolButton,QMenu,QStackedWidget,QWidgetAction)
 from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput
 from . import __version__
 from .model import Settings,Segment,analyze_plan,move_boundary,statistics,detection_statistics,split_plan,edit_range
-from .motion import analyze,analysis_dimensions
+from .manual_intervals import assign as assign_manual, analysis_windows
+from .motion import analyze,analyze_selected,analysis_dimensions
 from .review import review_spans,review_reasons
 from .video import probe
 from .export import export,proxy
@@ -28,7 +29,7 @@ from .preferences import read_language,save_language
 from .icons import icon
 from .worker import Worker
 from .debug import Journal,snapshot,write_report
-from .widgets import VideoView,Timeline,VideoDropFilter,video_drop_path,Fold,SettingRow,StatCard,MotionGraph,clock,review_tip,PlanTableModel
+from .widgets import VideoView,Timeline,TimelineViewport,VideoDropFilter,video_drop_path,Fold,SettingRow,StatCard,MotionGraph,clock,review_tip,PlanTableModel
 
 
 class ExportDialog(QDialog):
@@ -51,10 +52,11 @@ class ExportDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self,language=None,remember=True):
         super().__init__();self.language=language or read_language();self.remember=remember
-        self.setWindowTitle(f'Smart Video Cutter · {__version__}');self.resize(1280,920)
+        self.setWindowTitle(f'Smart Video Cutter · {__version__}');self.resize(1366,850)
         self.video_expanded=False;self.sidebar_visible=True;self._review_cache=None;self._raw_cache=None
-        self.project=[];self.project_index=0
+        self.project=[];self.project_index=0;self._hidden_by_video={}
         self.video=None;self.samples=[];self.plan=[];self.automatic=[];self.report=None
+        self.manual_intervals=[];self.coverage_dirty=False
         self.area=(0,0,1,1);self.worker=None;self.closing=False;self.dirty=False;self.manual_changed=False;self.plan_reset_notice=False
         self.capture_settings=None;self.capture_area_mode=0;self.pending_settings=None;self.pending_area_mode=0
         self.preview_path=self.proxy_path=None;self.last_export_path='';self.current_stage=None
@@ -67,12 +69,19 @@ class Window(QMainWindow):
         self.view=VideoView();self.player.setVideoOutput(self.view.item)
         self.player.positionChanged.connect(self.position_changed)
         self.player.durationChanged.connect(lambda _:self.position_changed(self.player.position()))
+        self.player.mediaStatusChanged.connect(self.pending_project_seek)
         self.player.playbackStateChanged.connect(lambda _:self.render_play())
         self.player.errorOccurred.connect(self.media_error)
         self.build_ui()
         self.view.expand_requested.connect(self.toggle_video_expanded)
         self.expand_shortcut=QShortcut(QKeySequence('Ctrl+Return'),self);self.expand_shortcut.activated.connect(self.toggle_video_expanded)
         self.escape_shortcut=QShortcut(QKeySequence('Escape'),self);self.escape_shortcut.activated.connect(lambda:self.set_video_expanded(False))
+        self.command_shortcuts=[]
+        for keys,command in (('Ctrl+O',self.open_button.click),('Ctrl+E',self.export_button.click),
+            ('Ctrl+Shift+A',self.analyze_all_button.click),('Ctrl+L',self.range_button.click),
+            ('Ctrl+=',lambda:self.zoom.setValue(self.zoom.value()+1)),('Ctrl+-',lambda:self.zoom.setValue(self.zoom.value()-1)),
+            ('Ctrl+0',lambda:self.zoom.setValue(1))):
+            shortcut=QShortcut(QKeySequence(keys),self);shortcut.activated.connect(command);self.command_shortcuts.append(shortcut)
         self.eta_timer=QTimer(self);self.eta_timer.setInterval(500);self.eta_timer.timeout.connect(self.render_eta)
         self.drop_filter=VideoDropFilter(self)
         for widget in [self,*self.findChildren(QWidget)]:
@@ -139,6 +148,7 @@ class Window(QMainWindow):
         result.addWidget(self.suggestions)
         self.timeline_legend=self.text('legend','muted');self.timeline=Timeline();self.timeline.selected.connect(self.select_segment)
         self.timeline.range_selected.connect(self.set_range)
+        self.timeline.project_seek.connect(self.seek_project)
         self.range_box=QWidget();range_outer=QVBoxLayout(self.range_box);range_outer.setContentsMargins(0,0,0,0);range_layout=QHBoxLayout();range_outer.addLayout(range_layout)
         self.range_start=QDoubleSpinBox();self.range_end=QDoubleSpinBox()
         for key,spin in (('range.from',self.range_start),('range.to',self.range_end)):
@@ -147,6 +157,10 @@ class Window(QMainWindow):
         range_actions=QHBoxLayout();range_outer.addLayout(range_actions)
         self.remove_range_button=self.button('range.remove',lambda:self.apply_range_action('remove'));range_actions.addWidget(self.remove_range_button)
         self.keep_range_button=self.button('keep',lambda:self.apply_range_action('keep'));range_actions.addWidget(self.keep_range_button);range_actions.addStretch()
+        confirmations=QHBoxLayout();range_outer.addLayout(confirmations)
+        for key,kind in (('confirm.pause','pause'),('confirm.motion','motion'),('confirm.auto','auto')):
+            button=self.button(key,lambda checked=False,k=kind:self.confirm_range(k))
+            self.bindings.append((button,'setToolTip','confirm.help'));confirmations.addWidget(button)
         self.range_box.hide()
         self.selected_box=QWidget();selected=QHBoxLayout(self.selected_box);selected.setContentsMargins(0,0,0,0)
         self.selected_label=QLabel();self.selected_label.setWordWrap(True);selected.addWidget(self.selected_label,1)
@@ -167,7 +181,16 @@ class Window(QMainWindow):
         self.results_scroll.setWidget(self.results)
         editor.addWidget(self.stats);editor.addWidget(self.result_message)
         self.results_fold=Fold('ui.results');self.results_fold.content.addWidget(self.results_scroll);editor.addWidget(self.results_fold)
-        editor.addWidget(self.timeline_legend);editor.addWidget(self.timeline);editor.addWidget(self.range_box);editor.addWidget(self.selected_box)
+        self.timeline_filters=QWidget();filters=QHBoxLayout(self.timeline_filters);filters.setContentsMargins(0,0,0,0);filters.setSpacing(5)
+        self.timeline_mode=QComboBox();self.timeline_mode.currentIndexChanged.connect(self.update_timeline_mode);self.timeline_mode.currentIndexChanged.connect(lambda _:self.render());filters.addWidget(self.timeline_mode)
+        self.filter_buttons={}
+        for layer,color,key in (('keep','#4bae91','keep'),('remove','#bd6679','remove'),('speed','#c1a15c','speed_up'),('review','#b08aff','timeline.review')):
+            button=QToolButton();button.setText('●');button.setCheckable(True);button.setChecked(True)
+            button.setStyleSheet(f'QToolButton {{ color: {color}; padding: 4px 8px; }} QToolButton:!checked {{ color: #6a7079; }}')
+            button.toggled.connect(lambda checked,l=layer:self.timeline.set_layer_visible(l,checked))
+            self.bindings.append((button,'setToolTip',key));filters.addWidget(button);self.filter_buttons[layer]=button
+        self.show_all_button=self.button('timeline.show_all',self.show_all_timeline);filters.addWidget(self.show_all_button);filters.addStretch()
+        editor.addWidget(self.timeline_filters);editor.addWidget(self.timeline);editor.addWidget(self.range_box);editor.addWidget(self.selected_box)
         self.review_actions=QWidget();review=QHBoxLayout(self.review_actions);review.setContentsMargins(0,0,0,0)
         self.preview_button=self.button('preview',self.preview_result,'play');self.export_button=self.button('export',self.start_export,'download',True)
         self.range_button=self.button('range.select',lambda:None);self.range_button.setCheckable(True);self.range_button.toggled.connect(self.toggle_range);review.addWidget(self.range_button)
@@ -214,6 +237,94 @@ class Window(QMainWindow):
         for widget in (self.minimum,self.padding,self.debounce):widget.valueChanged.connect(self.temporal_changed)
         self.mode.currentIndexChanged.connect(self.temporal_changed);self.speed.currentIndexChanged.connect(self.speed_changed)
         self.detection.currentIndexChanged.connect(self.area_mode);self.view.area_changed.connect(self.set_area)
+        self.organize_workspace(header,project_bar,editor,side,edit)
+
+    def organize_workspace(self,header,project_bar,editor,side,edit):
+        # Reuse the controller's existing commands/widgets, moving each to its
+        # primary workspace instead of creating parallel UI state.
+        header.itemAt(0).widget().hide()
+        self.open_button.clicked.disconnect();self.open_button.clicked.connect(lambda:self.open_dialog(append=bool(self.project)))
+        self.bindings=[(w,m,'workspace.add' if w is self.open_button else k) for w,m,k in self.bindings]
+        header.insertWidget(0,self.project_selector,1)
+        self.project_selector.setMinimumWidth(120);self.project_selector.setMaximumWidth(480)
+        header.insertWidget(2,self.project_tools)
+        header.insertWidget(3,self.analyze_button)
+        header.insertWidget(4,self.export_button)
+        self.export_button.setObjectName('')
+        self.export_button.style().unpolish(self.export_button);self.export_button.style().polish(self.export_button)
+        self.export_button.setIcon(icon('download'))
+        self.project_menu.addSeparator()
+        batch=QWidgetAction(self.project_menu);batch.setDefaultWidget(self.analyze_all_button);self.project_menu.addAction(batch)
+        # Replacing a project and appending clips are distinct commands.
+        replace_action=self.project_menu.addAction(self.t('open'),self.open_dialog)
+        self.bindings.append((replace_action,'setText','open'))
+        self.add_files_button.hide()
+        menu=QMenu(self.settings_button);self.settings_button.clicked.disconnect()
+        language=menu.addAction(self.t('language'),self.settings_dialog);self.bindings.append((language,'setText','language'))
+        for widget in (self.file_details_button,self.debug_button):
+            item=QWidgetAction(menu);item.setDefaultWidget(widget);menu.addAction(item)
+        self.settings_button.setMenu(menu)
+
+        self.context_mode=QComboBox();side.insertWidget(0,self.context_mode)
+        self.context_stack=QStackedWidget();side.addWidget(self.context_stack,1)
+        self.context_mode.currentIndexChanged.connect(self.context_stack.setCurrentIndex)
+        pages=[]
+        for _ in range(4):
+            page=QWidget();page_layout=QVBoxLayout(page);page_layout.setContentsMargins(0,4,0,0);page_layout.setSpacing(12)
+            self.context_stack.addWidget(page);pages.append(page_layout)
+        pages[0].addWidget(self.settings_scroll)
+        pages[1].addWidget(self.selected_box)
+        # One action editor: direct choices use the same set_action command.
+        while self.selected_box.layout().count()>1:
+            item=self.selected_box.layout().takeAt(1)
+            if item.widget():
+                self.bindings=[binding for binding in self.bindings if binding[0] is not item.widget()]
+                item.widget().deleteLater()
+        self.manual.content.removeItem(edit)
+        while edit.count():edit.takeAt(0)
+        form=QFormLayout()
+        for key,widget in (('start',self.start),('end',self.end),('action',self.action)):
+            form.addRow(self.text(key),widget)
+        pages[1].addLayout(form);pages[1].addWidget(self.apply)
+        self.action.activated.connect(lambda index:self.set_action(('keep','remove','speed')[index]))
+        pages[1].addWidget(self.reset);pages[1].addWidget(self.manual);pages[1].addStretch()
+        pages[2].addWidget(self.result_message);pages[2].addWidget(self.results_fold);pages[2].addStretch()
+        self.results_scroll.setMaximumHeight(16777215)
+        self.context_mode.currentIndexChanged.connect(lambda index:self.results_fold.set_open(True) if index==2 else None)
+        self.sidebar.setMinimumWidth(300);self.sidebar.setMaximumWidth(420)
+        self.splitter.setStretchFactor(0,1);self.splitter.setStretchFactor(1,0);self.splitter.setSizes([1020,320])
+
+        timeline_index=editor.indexOf(self.timeline);editor.removeWidget(self.timeline)
+        self.timeline_viewport=TimelineViewport(self.timeline);editor.insertWidget(timeline_index,self.timeline_viewport)
+        self.zoom=QSlider(Qt.Horizontal);self.zoom.setRange(1,16);self.zoom.setValue(1);self.zoom.setFixedWidth(100)
+        self.zoom.valueChanged.connect(self.timeline_viewport.set_zoom)
+        self.timeline_viewport.zoom_changed.connect(self.zoom.setValue)
+        self.zoom.setToolTip(self.t('workspace.zoom'));self.bindings.append((self.zoom,'setToolTip','workspace.zoom'))
+        self.timeline_filters.layout().addWidget(self.zoom)
+        self.zoom_reset=QToolButton();self.zoom_reset.setText('1×');self.zoom_reset.setToolTip(self.t('workspace.zoom'))
+        self.zoom_reset.clicked.connect(lambda:self.zoom.setValue(1));self.zoom.valueChanged.connect(lambda value:self.zoom_reset.setText(f'{value}×'))
+        self.timeline_filters.layout().addWidget(self.zoom_reset)
+        # Range tools occupy two compact rows; confirmations are clearly
+        # separate from editing actions and reuse confirm_range.
+        outer=self.range_box.layout();confirmations=outer.takeAt(2)
+        if confirmations and confirmations.layout():
+            while confirmations.layout().count():
+                item=confirmations.layout().takeAt(0)
+                if item.widget():
+                    self.bindings=[binding for binding in self.bindings if binding[0] is not item.widget()]
+                    item.widget().deleteLater()
+        self.confirm_kind=QComboBox();self.confirm_apply=self.button('workspace.confirm',lambda:self.confirm_range(('pause','motion','auto')[self.confirm_kind.currentIndex()]))
+        old=outer.takeAt(0).layout()
+        while old.count():
+            item=old.takeAt(0)
+            if item.widget() not in (self.range_start,self.range_end) and item.widget():
+                self.bindings=[binding for binding in self.bindings if binding[0] is not item.widget()];item.widget().deleteLater()
+        bounds=QFormLayout();bounds.addRow(self.text('range.from'),self.range_start);bounds.addRow(self.text('range.to'),self.range_end)
+        outer.insertLayout(0,bounds)
+        confirm_row=QHBoxLayout();confirm_row.addWidget(self.confirm_kind,1);confirm_row.addWidget(self.confirm_apply);outer.addLayout(confirm_row)
+        pages[3].addWidget(self.range_box);pages[3].addStretch()
+        self.review_actions.layout().addWidget(self.sidebar_button)
+        self.metadata_widget.hide();self.project_widget.hide()
 
     def add_setting(self,layout,key,widget,reset):
         row=SettingRow(key,widget,'',reset,self.language);self.rows[key]=row;layout.addWidget(row)
@@ -250,13 +361,18 @@ class Window(QMainWindow):
         if self._updating:return
         self.journal.add('detector_settings_changed',settings=asdict(self.settings()))
         if self.samples:
-            self.dirty=self.capture_settings is None or self.signature(self.settings(),self.detection.currentIndex())!=self.signature(self.capture_settings,self.capture_area_mode)
+            self.dirty=self.coverage_dirty or self.capture_settings is None or self.signature(self.settings(),self.detection.currentIndex())!=self.signature(self.capture_settings,self.capture_area_mode)
             if not self.dirty:self.replan()
         self.invalidate_preview();self.render()
 
     def temporal_changed(self,*_):
         if self._updating:return
         self.journal.add('pause_settings_changed',settings=asdict(self.settings()),mode=self.mode.currentIndex())
+        if hasattr(self.samples,'windows') and self.capture_settings:
+            current=self.settings();captured=self.capture_settings
+            old=max(2.,captured.min_idle+captured.padding+captured.debounce,2/captured.sample_fps)
+            new=max(2.,current.min_idle+current.padding+current.debounce,2/current.sample_fps)
+            if new>old+1e-9:self.coverage_dirty=True;self.dirty=True
         if self.samples and not self.dirty:self.replan()
         self.invalidate_preview();self.render()
 
@@ -268,7 +384,7 @@ class Window(QMainWindow):
         self.plan_mode='remove' if self.mode.currentIndex()==0 else 'speed'
         reviews=self.get_review_spans()
         self.report=replace(self.report,plan=tuple(split_plan(self.report.plan,[t for r in reviews for t in (r.start,r.end)])))
-        self.automatic=list(self.report.plan);self.plan=list(self.automatic);self.manual_changed=False
+        self.automatic=list(self.report.plan);self.plan=self.apply_confirmations(self.automatic);self.manual_changed=False
         self.invalidate_preview();self.render_plan()
 
     def speed_changed(self,*_):
@@ -294,7 +410,10 @@ class Window(QMainWindow):
         for widget,method,key in self.bindings:getattr(widget,method)(self.t(key))
         for combo,keys in ((self.profile,('profile.drawing','profile.screen','profile.general')),
             (self.mode,('mode.remove','mode.speed')),(self.detection,('area.full','area.custom')),
-            (self.preview_mode,('original','edited')),(self.action,('keep','remove','speed_up'))):
+            (self.preview_mode,('original','edited')),(self.action,('keep','remove','speed_up')),
+            (self.timeline_mode,('timeline.current','timeline.all')),
+            (self.context_mode,('workspace.analysis','workspace.segment','workspace.details','workspace.range')),
+            (self.confirm_kind,('confirm.pause','confirm.motion','confirm.auto'))):
             index=combo.currentIndex();combo.blockSignals(True)
             if combo.count()!=len(keys):combo.clear();combo.addItems([self.t(key) for key in keys]);combo.setCurrentIndex(max(0,index))
             else:
@@ -336,7 +455,7 @@ class Window(QMainWindow):
     # Per-file editor state is kept in memory while switching project clips.
     project_fields=('samples','plan','automatic','report','capture_settings','capture_area_mode',
                     'dirty','manual_changed','plan_reset_notice','plan_settings','plan_mode','area',
-                    'last_analysis_elapsed','last_analysis_debug','last_job_debug')
+                    'last_analysis_elapsed','last_analysis_debug','last_job_debug','manual_intervals','coverage_dirty')
     project_controls=('profile','sensitivity','minimum','padding','debounce','frequency','detail',
                       'adaptive','parallel','mode','speed','detection')
 
@@ -374,6 +493,7 @@ class Window(QMainWindow):
             self.project_selector.addItem(f"{i+1}. {entry['video'].path.name}")
             self.project_selector.setItemData(i,str(entry['video'].path),Qt.ToolTipRole)
         self.project_selector.setCurrentIndex(self.project_index);self.project_selector.blockSignals(False)
+        self.update_timeline_mode()
 
     def switch_file(self,index):
         if self.worker or index<0 or index>=len(self.project) or index==self.project_index:return
@@ -387,7 +507,7 @@ class Window(QMainWindow):
 
     def remove_file(self):
         if self.worker or len(self.project)<2:return
-        if self.manual_changed and not self.question('discard.title','discard'):return
+        if (self.manual_changed or self.manual_intervals) and not self.question('discard.title','discard'):return
         del self.project[self.project_index]
         self.project_index=min(self.project_index,len(self.project)-1)
         self.restore_editor(self.project[self.project_index]);self.refresh_project();self.render()
@@ -400,7 +520,7 @@ class Window(QMainWindow):
 
     def open_videos(self,paths,append=False):
         if self.worker or self.closing:return
-        if not append and (self.samples or self.manual_changed or any(e['state'] and (e['state']['fields']['samples'] or e['state']['fields']['manual_changed']) for e in self.project)) and not self.question('discard.title','discard'):return
+        if not append and (self.samples or self.manual_changed or self.manual_intervals or any(e['state'] and (e['state']['fields']['samples'] or e['state']['fields']['manual_changed'] or e['state']['fields'].get('manual_intervals')) for e in self.project)) and not self.question('discard.title','discard'):return
         paths=list(dict.fromkeys(str(Path(path).resolve()) for path in paths))
         if append:
             existing={str(e['video'].path) for e in self.project}
@@ -425,23 +545,47 @@ class Window(QMainWindow):
         if any(e['state'] and e['state']['fields']['manual_changed'] for e in self.project):
             if not self.question('discard.title','batch.reanalyze'):return
         template=self.editor_state()
-        states=[e['state'] or template for e in self.project]
+        states=[]
+        for entry in self.project:
+            if entry['state']:states.append(entry['state'])
+            else:
+                fresh=dict(template);fresh['fields']=dict(template['fields'],manual_intervals=[])
+                states.append(fresh)
         if any(st['controls']['detection']==1 and st['settings'].area==(0,0,1,1) for st in states):
             self.show_error(AppError('error.draw_area'));return
         videos=[e['video'] for e in self.project]
         def operation(job,progress):
             results=[]
             for i,(video,st) in enumerate(zip(videos,states)):
-                samples=analyze(video,st['settings'],job,lambda f,s,i=i:progress((i+f)/len(videos),Text('batch.progress',{'index':i+1,'count':len(videos)})))
+                manual=st['fields'].get('manual_intervals',[])
+                if manual and not analysis_windows(manual,video.duration,0):
+                    job.check();mode='remove' if st['controls']['mode']==0 else 'speed'
+                    speed=(2,5,10,20)[st['controls']['speed']]
+                    plan=[Segment(0,video.duration)]
+                    for interval in manual:
+                        plan=edit_range(plan,interval.start,interval.end,mode if interval.kind=='pause' else 'keep',speed)
+                    fields=dict(st['fields']);fields.update(samples=[],plan=plan,automatic=[Segment(0,video.duration)],report=None,
+                        capture_settings=st['settings'],capture_area_mode=st['controls']['detection'],dirty=False,manual_changed=False,
+                        plan_reset_notice=False,plan_settings=st['settings'],plan_mode=mode,last_analysis_elapsed=0.,area=st['settings'].area,
+                        last_analysis_debug={},last_job_debug={},coverage_dirty=False)
+                    results.append(dict(fields=fields,controls=dict(st['controls']),settings=st['settings']))
+                    progress((i+1)/len(videos),Text('batch.progress',{'index':i+1,'count':len(videos)}))
+                    continue
+                callback=lambda f,s,i=i:progress((i+f)/len(videos),Text('batch.progress',{'index':i+1,'count':len(videos)}))
+                samples=analyze_selected(video,st['settings'],job,manual,callback) if manual else analyze(video,st['settings'],job,callback)
                 mode='remove' if st['controls']['mode']==0 else 'speed'
                 report=analyze_plan(samples,video.duration,st['settings'],mode,(2,5,10,20)[st['controls']['speed']])
                 width,height=analysis_dimensions(video,st['settings'])
                 reviews=review_spans(samples,video.duration,width*height,st['settings'].min_idle,st['settings'].debounce)
                 report=replace(report,plan=tuple(split_plan(report.plan,[t for r in reviews for t in (r.start,r.end)])))
-                fields=dict(st['fields']);fields.update(samples=samples,plan=list(report.plan),automatic=list(report.plan),report=report,
+                plan=list(report.plan)
+                for interval in st['fields'].get('manual_intervals',[]):
+                    action=mode if interval.kind=='pause' else 'keep'
+                    plan=edit_range(plan,interval.start,interval.end,action,(2,5,10,20)[st['controls']['speed']])
+                fields=dict(st['fields']);fields.update(samples=samples,plan=plan,automatic=list(report.plan),report=report,
                     capture_settings=st['settings'],capture_area_mode=st['controls']['detection'],dirty=False,manual_changed=False,
                     plan_reset_notice=False,plan_settings=st['settings'],plan_mode=mode,last_analysis_elapsed=None,area=st['settings'].area,
-                    last_analysis_debug={},last_job_debug={})
+                    last_analysis_debug={},last_job_debug={},coverage_dirty=False)
                 results.append(dict(fields=fields,controls=dict(st['controls']),settings=st['settings']))
             return results
         def done(results):
@@ -454,7 +598,10 @@ class Window(QMainWindow):
         self.plan_settings=None
         self.player.stop();self.player.setSource(QUrl());self.video=video
         self.samples=[];self.plan=[];self.automatic=[];self.report=None;self.capture_settings=None;self.dirty=False;self.manual_changed=False;self.plan_reset_notice=False
+        self.manual_intervals=[];self.coverage_dirty=False
         self.plan=[Segment(0,video.duration)];self.automatic=list(self.plan)
+        if not hasattr(self,'_hidden_by_video'):self._hidden_by_video={}
+        self.timeline.hidden_segments=self._hidden_by_video.setdefault(str(video.path),set())
         self.range_button.setChecked(False);self.timeline.selection=None
         for spin in (self.range_start,self.range_end):spin.blockSignals(True);spin.setRange(0,video.duration)
         self.range_start.setValue(0);self.range_end.setValue(min(1,video.duration))
@@ -465,7 +612,7 @@ class Window(QMainWindow):
         self.area=(0,0,1,1);self.detection.setCurrentIndex(0);self._updating=False;self.view.dimensions(video.display_width,video.height)
         self.cleanup_cache();self.preview_mode.blockSignals(True);self.preview_mode.setCurrentIndex(0);self.preview_mode.blockSignals(False)
         self.codec_notice.hide();self.player.setSource(QUrl.fromLocalFile(str(video.path)))
-        self.workflow.state=State.READY;self.last_analysis_elapsed=None;self.analysis_estimate=None;self.render_plan();self.render()
+        self.workflow.state=State.READY;self.last_analysis_elapsed=None;self.analysis_estimate=None;self.render_plan(prune_hidden=False);self.render()
 
     def work(self,operation,done,stage,kind='analysis',analysis=None):
         if self.worker:return
@@ -536,15 +683,28 @@ class Window(QMainWindow):
 
     def start_analysis(self):
         if not self.video or self.worker:return
+        if self.manual_changed and not self.question('discard.title','batch.reanalyze'):return
         if self.detection.currentIndex()==1 and self.area==(0,0,1,1):self.show_error(AppError('error.draw_area'));return
         self.pending_settings=self.settings();self.pending_area_mode=self.detection.currentIndex()
-        self.work(lambda job,p:analyze(self.video,self.pending_settings,job,p),self.analyzed,Text('state.analyzing'),'analysis')
+        skip=bool(self.manual_intervals) and not analysis_windows(self.manual_intervals,self.video.duration,0)
+        def operation(job,progress):
+            if skip:
+                job.check();job.debug_analysis_performance=dict(frames=0,full_checks=0,manual_only=True)
+                progress(1.,Text('stage.analysis_complete'));return None
+            if self.manual_intervals:return analyze_selected(self.video,self.pending_settings,job,list(self.manual_intervals),progress)
+            return analyze(self.video,self.pending_settings,job,progress)
+        self.work(operation,self.analyzed,Text('state.analyzing'),'analysis')
 
     def analyzed(self,samples):
-        self.samples=samples;self.capture_settings=self.pending_settings or self.settings();self.capture_area_mode=self.pending_area_mode
-        self.dirty=False;self.manual_changed=False;self.plan_reset_notice=False;self.selected_box.hide();self.timeline.index=-1
+        manual_only=samples is None
+        self.samples=[] if manual_only else samples;self.capture_settings=self.pending_settings or self.settings();self.capture_area_mode=self.pending_area_mode
+        self.dirty=False;self.coverage_dirty=False;self.manual_changed=False;self.plan_reset_notice=False;self.selected_box.hide();self.timeline.index=-1
         if self.analysis_estimate:self.last_analysis_elapsed=self.analysis_estimate.elapsed()
-        self.replan();self.graph.set_samples(samples,self.video.duration)
+        if manual_only:
+            self.report=None;self.automatic=[Segment(0,self.video.duration)];self.plan=self.apply_confirmations(self.automatic)
+            self.plan_settings=self.capture_settings;self.render_plan()
+        else:self.replan()
+        self.graph.set_samples(self.samples,self.video.duration)
 
     def toggle_sidebar(self):
         self.sidebar_visible=not self.sidebar_visible;self.render()
@@ -571,17 +731,68 @@ class Window(QMainWindow):
             self._review_cache=(token,reviews,self.samples)
         return self._review_cache[1]
 
-    def render_plan(self):
+    def render_plan(self,prune_hidden=True):
+        if prune_hidden:
+            self.timeline.hidden_segments.intersection_update(self.timeline.segment_key(s) for s in self.plan)
         reviews=self.get_review_spans()
+        self.timeline.confirmations=self.manual_intervals
         self.timeline.set_plan(self.plan,reviews);self.table_model.set_plan(self.plan,reviews,self.language)
+        self.update_timeline_mode()
         if self.plan:
             index=min(max(0,self.timeline.index),len(self.plan)-1);self.populate_segment(index,select=False)
         self.render()
+
+    def update_timeline_mode(self,*_):
+        if not hasattr(self,'timeline_mode'):return
+        if self.timeline_mode.currentIndex()!=1 or not self.project:
+            self.timeline.set_project([])
+            return
+        clips=[]
+        for i,entry in enumerate(self.project):
+            video=entry['video'];state=entry['state']
+            if i==self.project_index:
+                plan=self.plan;reviews=self.get_review_spans();confirmations=self.manual_intervals
+            elif state:
+                fields=state['fields'];plan=fields['plan'];samples=fields['samples'];settings=fields['capture_settings'] or state['settings']
+                width,height=analysis_dimensions(video,settings)
+                token=(id(samples),len(samples),width,height,settings.min_idle,settings.debounce)
+                cache=entry.get('_timeline_review_cache')
+                if cache is None or cache[0]!=token:
+                    reviews=review_spans(samples,video.duration,width*height,settings.min_idle,settings.debounce) if samples else []
+                    entry['_timeline_review_cache']=(token,reviews,samples)
+                else:reviews=cache[1]
+                confirmations=fields.get('manual_intervals',[])
+            else:plan=[Segment(0,video.duration)];reviews=[];confirmations=[]
+            hidden=self._hidden_by_video.setdefault(str(video.path),set())
+            clips.append((video.path.name,video.duration,plan,reviews,hidden,confirmations))
+        self.timeline.project_index=self.project_index;self.timeline.set_project(clips)
+        if self.range_button.isChecked():self.range_button.setChecked(False)
+
+    def seek_project(self,index,position):
+        if index!=self.project_index:
+            self._pending_project_position=position
+            self.project_selector.setCurrentIndex(index)
+        else:self.player.setPosition(round(position*1000))
+
+    def pending_project_seek(self,status):
+        if status in (QMediaPlayer.LoadedMedia,QMediaPlayer.BufferedMedia) and hasattr(self,'_pending_project_position'):
+            position=self._pending_project_position;del self._pending_project_position
+            self.player.setPosition(round(position*1000))
 
     def render_results(self):
         if not self.video:return
         st=statistics(self.plan)
         self.stats.setText(f"{self.t('metric.original')}: {clock(self.video.duration)}  →  {self.t('metric.output')}: {clock(st['output'])}  ·  {self.t('metric.reduction')}: {st['reduction']:.1f}%")
+        if self.timeline.project_clips:
+            clips=self.timeline.project_clips
+            original=sum(c[1] for c in clips);output=sum(statistics(c[2])['output'] for c in clips)
+            affected=sum(s.end-s.start for c in clips for s in c[2] if s.action in ('remove','speed'))
+            review_count=sum(len(c[3]) for c in clips)
+            pauses=0.
+            for i,entry in enumerate(self.project):
+                report=self.report if i==self.project_index else (entry['state']['fields']['report'] if entry['state'] else None)
+                if report:pauses+=report.pause_time
+            self.stats.setText(self.t('timeline.summary',count=len(clips),original=clock(original),pauses=clock(pauses),affected=clock(affected),output=clock(output),reviews=review_count))
         if not self.samples:return st
         token=(id(self.samples),len(self.samples),self.video.duration,self.minimum.value())
         if self._raw_cache is None or self._raw_cache[0]!=token:
@@ -591,7 +802,8 @@ class Window(QMainWindow):
         pauses=self.report.pauses if self.report else ()
         self.pause_card.value.setText(self.t('metric.pause_value',time=clock(sum(b-a for a,b in pauses)),count=len(pauses)))
         self.removed_card.value.setText(clock(st['removed']))
-        self.motion_value.setText(f"{self.t('metric.original')}: {clock(self.video.duration)}\n{self.t('metric.motion')}: {clock(raw['motion'])} · {raw['motion_fraction']:.1%}")
+        coverage=self.t('metric.measured') if hasattr(self.samples,'windows') else self.t('metric.original')
+        self.motion_value.setText(f"{coverage}: {clock(raw['original'])}\n{self.t('metric.motion')}: {clock(raw['motion'])} · {raw['motion_fraction']:.1%}")
         if self.dirty:message=self.t('result.stale')
         elif st['output']<.02:message=self.t('result.empty')
         elif st['sections']>0:message=self.t('result.changed')
@@ -628,13 +840,13 @@ class Window(QMainWindow):
     def render(self):
         st=self.render_results() or statistics(self.plan)
         loaded=self.video is not None;busy=self.worker is not None;expanded=self.video_expanded and loaded
-        self.header_widget.setVisible(not expanded);self.metadata_widget.setVisible(not expanded)
-        self.project_widget.setVisible(not expanded);self.footer_widget.setVisible(not expanded)
+        self.header_widget.setVisible(not expanded);self.metadata_widget.hide()
+        self.project_widget.hide();self.footer_widget.setVisible(not expanded)
         self.root_layout.setContentsMargins(*((6,6,6,6) if expanded else (18,12,18,12)))
         self.expand_button.setText(self.t('ui.restore' if expanded else 'ui.expand'))
         self.expand_button.setToolTip(self.t('ui.expand_help'));self.expand_button.setEnabled(loaded)
         self.sidebar_button.setVisible(not expanded);self.sidebar_button.setChecked(self.sidebar_visible)
-        self.project_tools.setVisible(len(self.project)>1);self.project_tools.setEnabled(not busy)
+        self.project_tools.setVisible(loaded);self.project_tools.setEnabled(not busy)
         self.project_selector.setVisible(bool(self.project));self.project_selector.setEnabled(not busy)
         self.add_files_button.setEnabled(not busy)
         self.up_file.setVisible(len(self.project)>1);self.up_file.setEnabled(not busy and self.project_index>0)
@@ -663,13 +875,15 @@ class Window(QMainWindow):
         self.stats.setVisible(bool(self.plan) and not expanded)
         self.result_message.setVisible(bool(self.samples) and not expanded)
         self.review_actions.setVisible(loaded and not expanded)
-        self.range_button.setEnabled(loaded and not busy and not self.dirty)
+        self.range_button.setEnabled(loaded and not busy and not self.dirty and self.timeline_mode.currentIndex()==0)
         self.range_box.setVisible(loaded and self.range_button.isChecked() and not expanded)
         self.range_box.setEnabled(not busy and not self.dirty)
         for card in (self.raw_card,self.pause_card,self.removed_card):card.setVisible(bool(self.samples))
         self.analysis_details.setVisible(bool(self.samples))
         if expanded:self.selected_box.hide();self.codec_notice.hide()
-        self.timeline.setVisible(loaded and not expanded);self.timeline_legend.setVisible(loaded and not expanded)
+        self.timeline.setVisible(loaded and not expanded);self.timeline_legend.hide();self.timeline_filters.setVisible(loaded and not expanded)
+        self.timeline_viewport.setVisible(loaded and not expanded)
+        self.context_mode.setEnabled(not busy)
         self.rows['sensitivity'].name.setText(f"{self.t('sensitivity')} · {self.sensitivity.value()}%")
         if self.detection.currentIndex()==1:
             x,y,w,h=self.area;self.area_label.setText(self.t('area.selected',x=f'{x*100:.0f}',y=f'{y*100:.0f}',w=f'{w*100:.0f}',h=f'{h*100:.0f}'))
@@ -697,9 +911,17 @@ class Window(QMainWindow):
 
     def toggle_range(self,enabled):
         self.timeline.range_mode=enabled
+        if enabled:
+            self.context_mode.setCurrentIndex(3);self.sidebar_visible=True
+        elif self.context_mode.currentIndex()==3:self.context_mode.setCurrentIndex(0)
         if not enabled:self.timeline.selection=None;self.timeline.update()
         else:self.range_values_changed()
         self.render()
+
+    def show_all_timeline(self):
+        for button in self.filter_buttons.values():button.setChecked(True)
+        for hidden in getattr(self,'_hidden_by_video',{}).values():hidden.clear()
+        self.timeline.show_hidden()
 
     def set_range(self,start,end):
         self.range_button.setChecked(True)
@@ -710,15 +932,24 @@ class Window(QMainWindow):
 
     def range_values_changed(self,*_):
         if not hasattr(self,'remove_range_button'):return
-        start,end=self.range_start.value(),self.range_end.value()
+        start,end=self.range_coordinates()
         valid=bool(self.video) and 0<=start<end<=self.video.duration
         self.remove_range_button.setEnabled(valid);self.keep_range_button.setEnabled(valid)
         self.timeline.selection=(start,end) if valid and self.range_button.isChecked() else None
         self.timeline.update()
 
+    def range_coordinates(self):
+        start,end=self.range_start.value(),self.range_end.value()
+        # Spin boxes round their maximum to the display precision. The maximum
+        # still means EOF, including when the displayed number rounds upward.
+        if self.video and end==self.range_end.maximum():
+            tolerance=.5*10**(-self.range_end.decimals())+1e-9
+            if abs(end-self.video.duration)<=tolerance:end=self.video.duration
+        return start,end
+
     def apply_range_action(self,action):
         if not self.video or self.worker or self.dirty:return
-        start,end=self.range_start.value(),self.range_end.value()
+        start,end=self.range_coordinates()
         try:self.plan=edit_range(self.plan,start,end,action,self.speed_value())
         except ValueError as error:self.show_error(error);return
         self.manual_changed=True;self.plan_reset_notice=False
@@ -727,11 +958,44 @@ class Window(QMainWindow):
         index=next(i for i,s in enumerate(self.plan) if s.start<=start<s.end)
         self.populate_segment(index)
 
+    def apply_confirmations(self,plan):
+        result=list(plan)
+        for interval in self.manual_intervals:
+            action=('remove' if self.mode.currentIndex()==0 else 'speed') if interval.kind=='pause' else 'keep'
+            result=edit_range(result,interval.start,interval.end,action,self.speed_value())
+        return result
+
+    def confirm_range(self,kind):
+        if not self.video or self.worker or self.dirty:return
+        start,end=self.range_coordinates()
+        try:
+            intervals=assign_manual(self.manual_intervals,start,end,kind,self.video.duration)
+            # Restore the automatic baseline only in the selected range, then
+            # apply remaining confirmations. Other editing actions are retained.
+            plan=list(self.plan)
+            for segment in self.automatic:
+                a=max(start,segment.start);b=min(end,segment.end)
+                if a<b:plan=edit_range(plan,a,b,segment.action,segment.speed)
+            self.manual_intervals=intervals
+            for interval in intervals:
+                a=max(start,interval.start);b=min(end,interval.end)
+                if a<b:
+                    action=('remove' if self.mode.currentIndex()==0 else 'speed') if interval.kind=='pause' else 'keep'
+                    plan=edit_range(plan,a,b,action,self.speed_value())
+            self.plan=plan
+        except ValueError as error:self.show_error(error);return
+        self.journal.add('manual_confirmation',start=start,end=end,kind=kind,
+                         intervals=[asdict(item) for item in self.manual_intervals])
+        if kind=='auto' and hasattr(self.samples,'windows'):
+            self.coverage_dirty=True;self.dirty=True
+        self.invalidate_preview();self.render_plan()
+
     def populate_segment(self,index,select=True):
         if not self.plan:return
         s=self.plan[index];self.start.setValue(s.start);self.end.setValue(s.end);self.start.setEnabled(index>0);self.end.setEnabled(index<len(self.plan)-1)
         self.action.setCurrentIndex({'keep':0,'remove':1,'speed':2}[s.action])
         if select:
+            self.context_mode.setCurrentIndex(1);self.sidebar_visible=True
             self.timeline.index=index;self.timeline.update();self.table.selectRow(index);self.selected_box.show()
         label=self.t('segment.selected',start=clock(s.start),end=clock(s.end))
         reasons=review_reasons(self.timeline.reviews,s.start,s.end)
@@ -758,7 +1022,7 @@ class Window(QMainWindow):
         except ValueError as error:self.show_error(error)
 
     def reset_plan(self):
-        self.journal.add('manual_plan_reset');self.plan=list(self.automatic);self.manual_changed=False;self.plan_reset_notice=False;self.invalidate_preview();self.render_plan()
+        self.journal.add('manual_plan_reset');self.plan=self.apply_confirmations(self.automatic);self.manual_changed=False;self.plan_reset_notice=False;self.invalidate_preview();self.render_plan()
 
     def render_play(self):
         active=self.player.playbackState()==QMediaPlayer.PlayingState
@@ -880,7 +1144,7 @@ class Window(QMainWindow):
 
 
 STYLE='''
-QWidget { background: #171c24; color: #e0e6ee; font-family: 'Segoe UI', sans-serif; font-size: 12px; }
+QWidget { background: #171c24; color: #e0e6ee; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
 QLabel { background: transparent; }
 QLabel#brand { font-size: 22px; font-weight: 650; color: #f4f6fa; }
 QLabel#sectionTitle { font-size: 16px; font-weight: 600; padding: 4px 0; }
@@ -892,10 +1156,10 @@ QFrame#statCard { background: #202834; border-radius: 7px; }
 QLabel#statValue { font-size: 17px; font-weight: 600; }
 QLabel#resultMessage { padding: 9px; background: #20362f; border-radius: 6px; color: #b0ddca; }
 QLabel#resultMessage[warning="true"] { background: #383124; color: #ead5a3; }
-QPushButton,QComboBox,QDoubleSpinBox { background: #293342; border: 1px solid #3b4859; border-radius: 6px; padding: 8px; }
+QPushButton,QComboBox,QDoubleSpinBox { background: #252e3b; border: 1px solid #323e4e; border-radius: 6px; padding: 6px 9px; min-height: 20px; }
 QPushButton:hover { background: #354558; }
 QPushButton:disabled { color: #677589; background: #202835; }
-QPushButton#primary { background: #69d4ae; color: #112c23; font-weight: 650; border: 0; padding: 11px; }
+QPushButton#primary { background: #69d4ae; color: #112c23; font-weight: 650; border: 0; padding: 7px 12px; }
 QPushButton#dropZone { border: 1px dashed #52647b; background: #1a2330; color: #bfcee0; padding: 14px; }
 QPushButton#dropZone[dragActive="true"] { border: 2px solid #73dcba; background: #223d34; }
 QToolButton { border: 0; background: transparent; padding: 4px; }
@@ -909,6 +1173,12 @@ QProgressBar::chunk { background: #5cb99b; border-radius: 4px; }
 QTableView { background: #202835; gridline-color: #384556; border: 0; selection-background-color: #34584d; }
 QHeaderView::section { background: #293443; border: 0; padding: 6px; }
 QScrollArea { border: 0; }
+QMenu { background: #252e3b; border: 1px solid #394556; padding: 6px; }
+QMenu::item { padding: 8px 16px; }
+QMenu::item:selected { background: #354558; }
+QScrollBar:horizontal { background: #1a222d; height: 10px; border: 0; }
+QScrollBar::handle:horizontal { background: #435269; min-width: 28px; border-radius: 4px; }
+QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal { width: 0; }
 QScrollBar:vertical { background: #1a222d; width: 8px; margin: 0; border: 0; }
 QScrollBar::handle:vertical { background: #435269; min-height: 24px; border-radius: 4px; }
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height: 0; }

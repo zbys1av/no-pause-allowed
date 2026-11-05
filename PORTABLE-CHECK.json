@@ -15,7 +15,7 @@
   "output_duration": 3.0,
   "audio": true,
   "decoded_video_frame": true,
-  "version": "1.10.0",
+  "version": "1.11.0",
   "localized_ui": true,
   "svg_icons": true,
   "simple_mode": true,

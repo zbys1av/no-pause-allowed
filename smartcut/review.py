@@ -58,6 +58,16 @@ def review_sample_reasons(samples,duration,pixel_count,min_idle=3.,debounce=.3):
 
 
 def review_spans(samples, duration, pixel_count, min_idle=3., debounce=.3):
+    if hasattr(samples,'windows'):
+        from dataclasses import replace
+        from .manual_intervals import measured_intersections
+        result=[]
+        for start,end,automatic,items in samples.windows:
+            local=[replace(s,time=s.time-start) for s in items]
+            for span in review_spans(local,end-start,pixel_count,min_idle,debounce):
+                for a,b in measured_intersections([(span.start+start,span.end+start)],automatic):
+                    result.append(ReviewSpan(a,b,span.reasons))
+        return result
     flags=review_sample_reasons(samples,duration,pixel_count,min_idle,debounce)
     result=[];previous=0.
     for i,sample in enumerate(samples):

@@ -142,6 +142,21 @@ def make_plan(samples, duration, settings, mode="remove", speed=5):
 
 def analyze_plan(samples, duration, settings, mode="remove", speed=5):
     settings.validate()
+    if hasattr(samples,'windows'):
+        from .manual_intervals import measured_intersections
+        plan=[Segment(0,duration)];raw=[];idle=[];pauses=[];available=[];bursts=short=lost=0
+        for start,end,automatic,items in samples.windows:
+            local=[replace(s,time=s.time-start) for s in items]
+            report=analyze_plan(local,end-start,settings,mode,speed)
+            def measured(spans):
+                return measured_intersections([(a+start,b+start) for a,b in spans],automatic)
+            raw.extend(measured(report.raw_idle));idle.extend(measured(report.stable_idle))
+            pauses.extend(measured(report.pauses));available.extend(measured(report.available))
+            for segment in report.plan:
+                for a,b in measured([(segment.start,segment.end)]):
+                    plan=edit_range(plan,a,b,segment.action,segment.speed)
+            bursts+=report.merged_bursts;short+=report.rejected_short;lost+=report.lost_to_padding
+        return AnalysisReport(tuple(raw),tuple(idle),tuple(pauses),tuple(available),bursts,short,lost,tuple(plan))
     raw_idle = complement(activity_intervals(samples, duration), duration)
     filtered, merged_bursts = stabilize(samples, duration, settings.debounce)
     merged = activity_intervals(filtered, duration)
@@ -186,6 +201,18 @@ def activity_intervals(samples, duration):
 
 
 def detection_statistics(samples, duration, min_idle):
+    if hasattr(samples,'windows'):
+        from .manual_intervals import measured_intersections
+        motion=still=long_idle=0.;sections=0
+        for start,end,automatic,items in samples.windows:
+            local=[replace(s,time=s.time-start) for s in items]
+            active=activity_intervals(local,end-start)
+            def measured(spans):return measured_intersections([(a+start,b+start) for a,b in spans],automatic)
+            a=measured(active);quiet=measured(complement(active,end-start))
+            motion+=sum(b-a for a,b in a);still+=sum(b-a for a,b in quiet)
+            long_idle+=sum(b-a for a,b in quiet if b-a>=min_idle);sections+=sum(b-a>=min_idle for a,b in quiet)
+        measured_duration=motion+still
+        return dict(original=measured_duration,motion=motion,still=still,motion_fraction=motion/measured_duration if measured_duration else 0,long_idle=long_idle,sections=sections)
     active = activity_intervals(samples, duration)
     still = complement(active, duration)
     long_pauses = [(a, b) for a, b in still if b-a >= min_idle]

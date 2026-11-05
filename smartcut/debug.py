@@ -70,6 +70,8 @@ def snapshot(window):
         mode='remove' if window.mode.currentIndex()==0 else 'speed',
         plan_mode=getattr(window,'plan_mode','remove'),
         speed=window.speed_value(), manual_changed=window.manual_changed,
+        manual_intervals=[asdict(item) for item in window.manual_intervals],
+        analysis_coverage=[dict(start=a,end=b,automatic=ranges) for a,b,ranges,_ in getattr(window.samples,'windows',[])],
         video={k:v for k,v in asdict(video).items() if k!='path'} if video else None,
         source_filename=video.path.name if video else None,
         automatic_plan=[asdict(s) for s in window.automatic],

@@ -1,4 +1,4 @@
-Smart Video Cutter 1.10 — Windows 10/11 x64 Portable
+Smart Video Cutter 1.11 — Windows 10/11 x64 Portable
 
 1. Extract the entire ZIP archive to a normal folder.
 2. Open the extracted folder.

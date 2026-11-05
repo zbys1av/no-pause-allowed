@@ -7,6 +7,8 @@ import subprocess
 import threading
 import math
 import time
+from itertools import groupby
+from bisect import bisect_left
 import numpy as np
 from .process import child, tool
 from .model import MotionSample
@@ -271,18 +273,36 @@ class MotionTracker:
         self.previous = frame
 
 
-def analyze(video, settings, job, progress=lambda *_: None):
+def analyze(video, settings, job, progress=lambda *_: None, *, window=None, seek_at=None, regions=None):
     settings.validate()
+    if regions is not None:
+        if window is not None or seek_at is not None:raise ValueError('Conflicting decode modes')
+        if not regions:raise ValueError('Empty decode regions')
+    if window is not None:
+        start,end=window
+        if not (math.isfinite(start) and math.isfinite(end) and 0<=start<end<=video.duration):
+            raise ValueError('Invalid analysis window')
     x, y, w, h = settings.area
     width, height = analysis_dimensions(video, settings)
     workers,selection=choose_workers(settings.workers,video.duration,width*height)
     decoder_threads='1' if settings.workers>1 else '2'
     crop = f"crop=w=iw*{w}:h=ih*{h}:x=iw*{x}:y=ih*{y},"
-    filters = ("setpts=PTS-STARTPTS,select='isnan(prev_selected_t)+gte(t-prev_selected_t,"
-               f"{1/settings.sample_fps-1e-6})'," + crop +
+    window_filter=''
+    if window is not None or regions is not None:
+        from .manual_intervals import ffmpeg_window_filter
+        window_filter=ffmpeg_window_filter(regions if regions is not None else [(start,end,[])])+','
+    prefix='setpts=PTS-STARTPTS,' if seek_at is None else ''
+    filters = (prefix+"select='isnan(prev_selected_t)+gte(t-prev_selected_t,"
+               f"{1/settings.sample_fps-1e-6})'," + window_filter + crop +
                f"scale={width}:{height}:flags=area,format=rgb24,showinfo")
-    args = [tool("ffmpeg"), "-hide_banner", "-nostdin", "-filter_threads", '1', "-threads", decoder_threads, "-i", str(video.path),
-            "-map", "0:v:0", "-an", "-sn", "-vf", filters, "-fps_mode", "vfr",
+    args = [tool("ffmpeg"), "-hide_banner", "-nostdin", "-filter_threads", '1', "-threads", decoder_threads]
+    if seek_at is not None:args += ['-copyts','-start_at_zero','-ss',f'{seek_at:.9f}']
+    # Bound the input, not just the filtered output: a select filter can discard
+    # every later frame, preventing an output -t from ever observing its limit.
+    input_end=min(video.duration,(regions[-1][1] if regions is not None else end)+1.) if (window is not None or regions is not None) else None
+    if input_end is not None:args += ['-t',f'{input_end-(seek_at or 0.):.9f}']
+    args += ['-i',str(video.path)]
+    args += ["-map", "0:v:0", "-an", "-sn", "-vf", filters, "-fps_mode", "vfr",
             "-threads", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
     timestamps = queue.Queue()
     errors = deque(maxlen=30)
@@ -295,6 +315,8 @@ def analyze(video, settings, job, progress=lambda *_: None):
                         decoder_threads=int(decoder_threads),pixel_kernel='rgb-channel-v2',
                         strategy='one_decoder_parallel_adjacent_pairs_ordered_temporal_state')
     analysis_started=time.perf_counter()
+    metadata={k:engine.stats[k] for k in ('requested_workers','effective_workers','worker_selection','decoder_threads','pixel_kernel','strategy')}
+    region_results=[];region_stats=[]
     frame_bytes = width*height*3
     last_progress = -math.inf
     pattern = re.compile(r"\bn:\s*\d+.*?pts_time:([\d.eE+\-]+)")
@@ -321,15 +343,29 @@ def analyze(video, settings, job, progress=lambda *_: None):
                 if timestamp is None or timestamp<=previous_time:raise AppError('error.frame')
                 previous_time=timestamp
                 yield timestamp,np.frombuffer(raw,np.uint8).reshape(height,width,3)
-        with PairPipeline(workers,lambda a,b:prepare_pair(a,b,settings.sensitivity),job,auto=settings.workers==0) as pipeline:
-            engine.stats['parallel']=pipeline.stats
-            for timestamp,current,pair in pipeline.frames(decoded()):
-                engine.stats['effective_workers']=pipeline.stats['max_workers_used']
-                engine.add(timestamp,current,pair=pair)
-                now=time.monotonic()
-                if now-last_progress>=.08:
-                    progress(min(.995,timestamp/video.duration*.995),Text('stage.analysis'))
-                    last_progress=now
+        # showinfo formats pts_time with limited precision. Classify inside the
+        # excluded gaps, rather than at inclusive window ends, so rounding of
+        # an endpoint cannot assign its frame to the following window.
+        cuts=[(regions[i][1]+regions[i+1][0])/2 for i in range(len(regions)-1)] if regions is not None else None
+        groups=groupby(decoded(),key=lambda item:bisect_left(cuts,item[0])) if regions is not None else [(0,decoded())]
+        for region_index,frames in groups:
+            if regions is not None:
+                tracker=MotionTracker(settings.sensitivity);engine=AdaptiveAnalysis(tracker,settings,video.fps)
+                engine.stats.update(metadata);engine.stats['cycles']=tracker.cycle_stats
+                job.debug_samples=tracker.samples;job.debug_analysis_performance=engine.stats
+            with PairPipeline(workers,lambda a,b:prepare_pair(a,b,settings.sensitivity),job,auto=settings.workers==0) as pipeline:
+                engine.stats['parallel']=pipeline.stats
+                for timestamp,current,pair in pipeline.frames(frames):
+                    engine.stats['effective_workers']=pipeline.stats['max_workers_used']
+                    engine.add(timestamp,current,pair=pair)
+                    now=time.monotonic()
+                    if now-last_progress>=.08:
+                        fraction=(timestamp-start)/(end-start) if window is not None else timestamp/video.duration
+                        progress(min(.995,max(0.,fraction*.995)),Text('stage.analysis'))
+                        last_progress=now
+            if regions is not None:
+                a,b,automatic=regions[region_index]
+                region_results.append((a,b,automatic,tracker.samples));region_stats.append(engine.stats)
         code = p.wait()
         reader.join()
         job.check()
@@ -339,9 +375,58 @@ def analyze(video, settings, job, progress=lambda *_: None):
         raise AppError("error.frames")
     progress(.999,Text('stage.validate_analysis'))
     from .model import analyze_plan
-    analyze_plan(tracker.samples,video.duration,settings)
+    if window is None and regions is None:analyze_plan(tracker.samples,video.duration,settings)
     job.check()
     engine.stats['validated_samples']=len(tracker.samples)
     progress(1., Text("stage.analysis_complete"))
     engine.stats['elapsed_s']=time.perf_counter()-analysis_started
+    engine.stats['ffmpeg_s']=engine.stats['elapsed_s']
+    engine.stats['seek_at']=seek_at
+    engine.stats['input_end_limit']=input_end
+    if regions is not None:
+        measured=WindowedSamples(region_results);job.debug_samples=measured
+        job.debug_analysis_performance=dict(frames=sum(s['frames'] for s in region_stats),
+            full_checks=sum(s['full_checks'] for s in region_stats),certified_quiet=sum(s['certified_quiet'] for s in region_stats),
+            effective_workers=max(s['effective_workers'] for s in region_stats),window_details=region_stats,
+            ffmpeg_processes=1,elapsed_s=time.perf_counter()-analysis_started,ffmpeg_s=time.perf_counter()-analysis_started)
+        return measured
     return tracker.samples
+
+
+class WindowedSamples(list):
+    """Measured samples grouped by decode window; context is not an auto range."""
+    def __init__(self, windows):
+        self.windows=windows
+        super().__init__(sample for _,_,_,samples in windows for sample in samples)
+
+
+def analyze_selected(video,settings,job,intervals,progress=lambda *_: None,*,decode_policy='auto'):
+    from .manual_intervals import analysis_windows
+    context=max(2.,settings.min_idle+settings.padding+settings.debounce,2/settings.sample_fps)
+    windows=analysis_windows(intervals,video.duration,context)
+    from .decode_strategy import choose_decode
+    started=time.perf_counter()
+    if decode_policy=='auto':windows,cadence,strategy=choose_decode(video,settings,job,windows)
+    elif decode_policy=='legacy':cadence=None;strategy='legacy_repeated_prefixes'
+    else:raise ValueError('Invalid decode policy')
+    if cadence is None and decode_policy=='auto' and windows:
+        measured=analyze(video,settings,job,progress,regions=windows)
+        job.debug_analysis_performance.update(decode_strategy=strategy,windows=len(windows),
+            seek_probe=getattr(job,'decode_probe',{}),elapsed_s=time.perf_counter()-started)
+        return measured
+    results=[];stats=[];total=sum(end-start for start,end,_ in windows);completed=0.
+    for index,(start,end,automatic) in enumerate(windows):
+        job.check()
+        seek_at=max(0.,math.floor(max(0.,start-1.)/cadence)*cadence) if cadence else None
+        samples=analyze(video,settings,job,
+            lambda fraction,stage,completed=completed,span=end-start:progress((completed+fraction*span)/total,stage),window=(start,end),seek_at=seek_at)
+        stats.append(job.debug_analysis_performance)
+        results.append((start,end,automatic,samples));completed+=end-start
+    measured=WindowedSamples(results)
+    job.debug_samples=measured
+    job.debug_analysis_performance=dict(frames=sum(s['frames'] for s in stats),
+        full_checks=sum(s['full_checks'] for s in stats),certified_quiet=sum(s['certified_quiet'] for s in stats),
+        windows=len(windows),effective_workers=max((s['effective_workers'] for s in stats),default=1),
+        elapsed_s=time.perf_counter()-started,ffmpeg_s=sum(s['ffmpeg_s'] for s in stats),
+        ffmpeg_processes=len(stats),decode_strategy=strategy,seek_probe=getattr(job,'decode_probe',{}),window_details=stats)
+    return measured

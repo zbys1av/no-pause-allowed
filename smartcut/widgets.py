@@ -1,11 +1,11 @@
 """Reusable Qt views; all editing policy lives in model/controller modules."""
 from bisect import bisect_right,bisect_left
 from math import log1p
-from PySide6.QtCore import Qt, Signal, QObject, QEvent, QTimer, QRectF, QAbstractTableModel
+from PySide6.QtCore import Qt, Signal, QObject, QEvent, QTimer, QRectF, QAbstractTableModel,QPropertyAnimation,QEasingCurve
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPainterPath
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (QWidget,QGraphicsView,QGraphicsScene,QGraphicsRectItem,
-    QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QToolButton,QFrame,QToolTip)
+    QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QToolButton,QFrame,QToolTip,QMenu,QScrollArea)
 from pathlib import Path
 from .i18n import tr,Text
 from .icons import icon
@@ -152,6 +152,9 @@ class Fold(QWidget):
         self.body=QWidget();self.content=QVBoxLayout(self.body)
         self.content.setContentsMargins(2,8,2,8)
         self.body.hide();layout.addWidget(self.toggle);layout.addWidget(self.body)
+        self.animation=QPropertyAnimation(self.body,b'maximumHeight',self);self.animation.setDuration(120)
+        self.animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.animation.finished.connect(lambda:self.body.setMaximumHeight(16777215) if self.toggle.isChecked() else None)
         self.toggle.toggled.connect(self.set_open)
         self.translate(language)
 
@@ -160,7 +163,10 @@ class Fold(QWidget):
         self.toggle.setIcon(icon('chevron-down' if self.toggle.isChecked() else 'chevron-right'))
 
     def set_open(self,opened):
-        self.toggle.setChecked(opened);self.body.setVisible(opened)
+        self.animation.stop();self.toggle.blockSignals(True);self.toggle.setChecked(opened);self.toggle.blockSignals(False)
+        self.body.setVisible(opened)
+        if opened:
+            self.body.setMaximumHeight(0);self.animation.setStartValue(0);self.animation.setEndValue(max(1,self.body.sizeHint().height()));self.animation.start()
         self.toggle.setIcon(icon('chevron-down' if opened else 'chevron-right'))
 
 
@@ -237,32 +243,132 @@ class StatCard(QFrame):
         if self.tip:self.setToolTip(tr(language,self.tip))
 
 
+class TimelineViewport(QScrollArea):
+    """Native horizontal scrolling over the existing painted source timeline."""
+    zoom_changed=Signal(int)
+    def __init__(self,timeline):
+        super().__init__();self.timeline=timeline;self.zoom=1
+        self.setFrameShape(QFrame.NoFrame);self.setWidget(timeline)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setMinimumHeight(78);self.setMaximumHeight(78)
+        timeline.setFixedHeight(56);timeline.setFixedWidth(640)
+
+    def set_zoom(self,value):
+        value=max(1,min(16,int(value)))
+        bar=self.horizontalScrollBar();center=(bar.value()+self.viewport().width()/2)/max(1,self.timeline.width())
+        self.zoom=value;self.timeline.setFixedWidth(max(1,self.viewport().width())*value)
+        bar.setValue(round(center*self.timeline.width()-self.viewport().width()/2))
+        self.zoom_changed.emit(value)
+
+    def resizeEvent(self,event):
+        super().resizeEvent(event);self.set_zoom(self.zoom)
+
+    def wheelEvent(self,event):
+        if event.modifiers() & Qt.ControlModifier:
+            self.set_zoom(self.zoom+(1 if event.angleDelta().y()>0 else -1));event.accept()
+        else:super().wheelEvent(event)
+
+
 class Timeline(QWidget):
     selected=Signal(int)
     range_selected=Signal(float,float)
+    project_seek=Signal(int,float)
     def __init__(self):
         super().__init__();self.plan=[];self.reviews=[];self.index=-1;self.position=0.;self.language='uk';self.ends=[]
         self.setMinimumHeight(42);self.setMouseTracking(True)
         self.range_mode=False;self.drag_start=None;self.selection=None
+        self.visible_layers={'keep','remove','speed','review'};self.hidden_segments=set()
+        self.project_clips=[]
+        self.project_index=0
+        self.project_ends=[]
+        self.confirmations=[]
+
+    def set_project(self,clips):
+        """Clips retain original-time boundaries; editing remains local to a clip."""
+        self.project_clips=list(clips)
+        self.project_ends=[[s.end for s in clip[2]] for clip in self.project_clips]
+        self.update()
+
+    def project_time(self,x):
+        total=sum(clip[1] for clip in self.project_clips)
+        t=min(total,max(0,x/max(1,self.width())*total));offset=0.
+        for i,(_,duration,_,_,_,_) in enumerate(self.project_clips):
+            if t<offset+duration or i==len(self.project_clips)-1:
+                return i,min(duration,max(0.,t-offset))
+            offset+=duration
+        return None
+
+    @staticmethod
+    def segment_key(segment):
+        return (segment.start,segment.end)
+
+    def segment_visible(self,segment,hidden,layer=None):
+        """Visibility affects painting only; hidden keys belong to one clip."""
+        return self.segment_key(segment) not in hidden and (layer or segment.action) in self.visible_layers
+
+    def set_layer_visible(self,layer,visible):
+        if visible:self.visible_layers.add(layer)
+        else:self.visible_layers.discard(layer)
+        self.update()
+
+    def show_hidden(self):
+        self.hidden_segments.clear();self.update()
+
+    def contextMenuEvent(self,event):
+        if self.project_clips:
+            point=self.project_time(event.pos().x())
+            if point is None:return
+            clip_index,position=point;_,_,plan,_,hidden,_=self.project_clips[clip_index]
+            index=min(len(plan)-1,bisect_right([s.end for s in plan],position))
+            if index<0:return
+        else:
+            index=self.at(event.pos().x());plan=self.plan;hidden=self.hidden_segments
+            if index is None:return
+        menu=QMenu(self)
+        key=self.segment_key(plan[index]);is_hidden=key in hidden
+        hide=menu.addAction(tr(self.language,'timeline.restore_segment' if is_hidden else 'timeline.hide_segment'))
+        show=menu.addAction(tr(self.language,'timeline.show_hidden'))
+        show.setEnabled(bool(hidden))
+        chosen=menu.exec(event.globalPos())
+        if chosen==hide:
+            if is_hidden:hidden.discard(key)
+            else:hidden.add(key)
+            self.update()
+        elif chosen==show:hidden.clear();self.update()
 
     def set_plan(self,plan,reviews=()):
         self.plan=list(plan);self.reviews=list(reviews);self.ends=[s.end for s in plan];self.update()
 
     def paintEvent(self,event):
         p=QPainter(self);p.fillRect(self.rect(),QColor('#242b35'))
+        if self.project_clips:
+            self.paint_project(p,event);return
         if not self.plan:return
         duration=self.plan[-1].end
-        for i,s in enumerate(self.plan):
+        left_time=max(0,event.rect().left()/max(1,self.width())*duration)
+        right_time=min(duration,(event.rect().right()+1)/max(1,self.width())*duration)
+        first=bisect_right(self.ends,left_time)
+        for i in range(first,len(self.plan)):
+            s=self.plan[i]
+            if s.start>right_time:break
+            if not self.segment_visible(s,self.hidden_segments):continue
             rect=QRectF(s.start/duration*self.width(),4,(s.end-s.start)/duration*self.width(),self.height()-8)
             p.fillRect(rect,QColor({'keep':'#4bae91','remove':'#bd6679','speed':'#c1a15c'}[s.action]))
             p.setPen(QPen(QColor('#f3f6fb' if i==self.index else '#1a2029'),2 if i==self.index else 1));p.drawRect(rect)
-        for span in self.reviews:
-            left=span.start/duration*self.width();width=max(2,(span.end-span.start)/duration*self.width())
-            # Keep a bottom strip in the action color; the purple body is a
-            # separate review status, including after a manual action change.
-            p.fillRect(QRectF(left,4,width,self.height()-12),QColor('#55416f'))
-            p.fillRect(QRectF(left,7,width,self.height()-15),QBrush(QColor('#c2a1ff'),Qt.BDiagPattern))
-            p.fillRect(QRectF(left,4,width,4),QColor('#b08aff'))
+        for span in self.reviews if 'review' in self.visible_layers else ():
+            if span.end<=left_time or span.start>right_time:continue
+            index=bisect_right(self.ends,span.start)
+            while index<len(self.plan) and self.plan[index].start<span.end:
+                segment=self.plan[index];index+=1
+                if not self.segment_visible(segment,self.hidden_segments,'review'):continue
+                start=max(span.start,segment.start);end=min(span.end,segment.end)
+                left=start/duration*self.width();width=(end-start)/duration*self.width()
+                p.fillRect(QRectF(left,4,width,self.height()-12),QColor('#55416f'))
+                p.fillRect(QRectF(left,7,width,self.height()-15),QBrush(QColor('#c2a1ff'),Qt.BDiagPattern))
+                p.fillRect(QRectF(left,4,width,4),QColor('#b08aff'))
+        for interval in self.confirmations:
+            left=interval.start/duration*self.width();width=(interval.end-interval.start)/duration*self.width()
+            p.fillRect(QRectF(left,0,width,3),QColor('#ffffff' if interval.kind=='motion' else '#ffb4c2'))
         p.setPen(QPen(QColor('#fff'),2));x=int(self.position/duration*self.width());p.drawLine(x,0,x,self.height())
         if self.selection:
             a,b=sorted(self.selection);left=a/duration*self.width();right=b/duration*self.width()
@@ -277,12 +383,18 @@ class Timeline(QWidget):
         return min(len(self.plan)-1,bisect_right(self.ends,max(0,x)/max(1,self.width())*self.plan[-1].end))
 
     def mousePressEvent(self,event):
+        if self.project_clips:
+            if event.button()==Qt.LeftButton:
+                point=self.project_time(event.position().x())
+                if point:self.project_seek.emit(*point)
+            return
         if self.plan and event.button()==Qt.LeftButton and (self.range_mode or event.modifiers()&Qt.ShiftModifier):
             self.drag_start=self.source_time(event.position().x());self.selection=(self.drag_start,self.drag_start);self.update();return
         index=self.at(event.position().x())
         if index is not None:self.selected.emit(index)
 
     def mouseMoveEvent(self,event):
+        if self.project_clips:return
         if self.drag_start is not None:
             self.selection=(self.drag_start,self.source_time(event.position().x()));self.update();return
         index=self.at(event.position().x())
@@ -296,11 +408,48 @@ class Timeline(QWidget):
             QToolTip.showText(event.globalPosition().toPoint(),tip,self)
 
     def mouseReleaseEvent(self,event):
+        if self.project_clips:return
         if self.drag_start is not None:
             a,b=sorted((self.drag_start,self.source_time(event.position().x())));self.drag_start=None
             self.selection=(a,b) if b-a>=.001 else None;self.update()
             if self.selection:self.range_selected.emit(a,b)
         else:super().mouseReleaseEvent(event)
+
+    def paint_project(self,p,event):
+        total=sum(clip[1] for clip in self.project_clips)
+        if total<=0:return
+        offset=0.
+        for clip_index,(name,duration,plan,reviews,hidden,confirmations) in enumerate(self.project_clips):
+            left=offset/total*self.width();right=(offset+duration)/total*self.width()
+            if right>=event.rect().left() and left<=event.rect().right():
+                ends=self.project_ends[clip_index]
+                visible_start=max(0,event.rect().left()/max(1,self.width())*total-offset)
+                visible_end=min(duration,(event.rect().right()+1)/max(1,self.width())*total-offset)
+                for index in range(bisect_right(ends,visible_start),len(plan)):
+                    s=plan[index]
+                    if s.start>visible_end:break
+                    if not self.segment_visible(s,hidden):continue
+                    x=(offset+s.start)/total*self.width();w=(s.end-s.start)/total*self.width()
+                    p.fillRect(QRectF(x,15,w,self.height()-19),QColor({'keep':'#4bae91','remove':'#bd6679','speed':'#c1a15c'}[s.action]))
+                if 'review' in self.visible_layers:
+                    for span in reviews:
+                        if span.end<=visible_start or span.start>visible_end:continue
+                        for index in range(bisect_right(ends,span.start),len(plan)):
+                            s=plan[index]
+                            if s.start>=span.end:break
+                            if not self.segment_visible(s,hidden,'review'):continue
+                            a=max(span.start,s.start);b=min(span.end,s.end)
+                            x=(offset+a)/total*self.width();w=(b-a)/total*self.width()
+                            p.fillRect(QRectF(x,15,w,self.height()-23),QColor('#55416f'))
+                for interval in confirmations:
+                    x=(offset+interval.start)/total*self.width();w=(interval.end-interval.start)/total*self.width()
+                    p.fillRect(QRectF(x,12,w,3),QColor('#ffffff' if interval.kind=='motion' else '#ffb4c2'))
+                p.setPen(QColor('#e5ebf2'));p.drawLine(int(left),0,int(left),self.height())
+                p.save();p.setClipRect(QRectF(left,0,max(0,right-left),15));p.drawText(QRectF(left+3,0,max(0,right-left-4),15),Qt.AlignLeft|Qt.AlignVCenter,name);p.restore()
+            offset+=duration
+        if 0<=self.project_index<len(self.project_clips):
+            position=sum(c[1] for c in self.project_clips[:self.project_index])+self.position
+            x=round(position/total*self.width());p.setPen(QPen(QColor('#fff'),2));p.drawLine(x,0,x,self.height())
 
 
 class MotionGraph(QWidget):

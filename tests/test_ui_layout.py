@@ -7,6 +7,27 @@ from smartcut.model import Segment
 from smartcut.video import Video
 from smartcut.widgets import PlanTableModel,Fold
 from smartcut.review import ReviewSpan
+import pytest
+
+
+@pytest.mark.parametrize('width,height',[(1280,720),(1366,768),(1920,1080)])
+def test_workspace_resize_zoom_and_context_preserve_plan(width,height):
+    w=editor()
+    try:
+        w.resize(width,height);QApplication.processEvents()
+        assert w.width()==width and w.height()==height
+        before=list(w.plan);source=w.player.source();duration=w.timeline.plan[-1].end
+        w.zoom.setValue(4);QApplication.processEvents()
+        assert w.timeline.width()==w.timeline_viewport.viewport().width()*4
+        assert w.timeline.source_time(w.timeline.width())==duration
+        assert w.timeline_viewport.horizontalScrollBar().maximum()>0
+        for index in (1,2,0):w.context_mode.setCurrentIndex(index)
+        assert w.plan==before and w.player.source()==source
+        keys=[s.key().toString() for s in w.command_shortcuts]+[w.expand_shortcut.key().toString(),w.escape_shortcut.key().toString()]
+        assert len(keys)==len(set(keys))
+        assert w.export_button.parentWidget() is w.header_widget
+        assert w.analyze_button.parentWidget() is w.header_widget
+    finally:w.close();QApplication.processEvents()
 
 
 def editor():
@@ -32,9 +53,10 @@ def test_expand_restores_editor_and_preserves_player_and_edits():
         assert w.player.source()==original_source and w.plan==original_plan and w.area==original_area
         w.render();assert not w.timeline.isVisible()
         w.expand_button.click();QApplication.processEvents()
-        assert not w.video_expanded and w.results_fold.isVisible() and w.results_fold.toggle.isChecked()
-        assert not w.sidebar.isVisible() and w.selected_box.isVisible()
+        assert not w.video_expanded and w.results_fold.toggle.isChecked()
+        assert not w.sidebar.isVisible() and w.timeline.index==0
         w.sidebar_button.click();assert w.sidebar.isVisible()
+        assert w.context_mode.currentIndex()==1 and w.selected_box.isVisible()
     finally:w.close();QApplication.processEvents()
 
 
@@ -64,11 +86,13 @@ def test_compact_sections_open_immediately():
         assert not w.drop_zone.isVisible() and not w.project_help.isVisible()
         assert not w.results_fold.body.isVisible() and not w.rows['minimum'].help.isVisible()
         w.rows['minimum'].info.click();assert w.rows['minimum'].help.isVisible()
-        w.results_fold.toggle.click();assert w.results_fold.body.isVisible()
+        w.context_mode.setCurrentIndex(2)
+        assert w.results_fold.body.isVisible()
+        w.context_mode.setCurrentIndex(0)
         w.advanced.toggle.click();assert w.advanced.body.isVisible()
         assert w.advanced.body.graphicsEffect() is None
         w.set_language('en');assert w.expand_button.text()=='Expand video'
-        assert w.results_fold.toggle.text()=='Statistics and manual editing'
+        assert w.results_fold.toggle.text()=='Analysis statistics'
     finally:w.close();QApplication.processEvents()
 
 

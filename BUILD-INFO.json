@@ -1,10 +1,10 @@
 {
-  "version": "1.10.0",
+  "version": "1.11.0",
   "tested_under": "Native Windows x64",
-  "source_snapshot_sha256": "80ac9075208ffa6e4f9ad26243b54e98dbb5691b31841fb3ba494ac78a85104f",
+  "source_snapshot_sha256": "a6f42d3d29f125dc7ea426ad2268d4e1ba7d82bd966d2d6a1dabbec3e19936aa",
   "source_snapshot_algorithm": "SHA256 of sorted smartcut/**/*.py: relative POSIX path + NUL + contents",
   "source_tests": {
-    "passed": 115
+    "passed": 147
   },
   "self_test": {
     "ok": true,
@@ -23,7 +23,7 @@
     "output_duration": 3.0,
     "audio": true,
     "decoded_video_frame": true,
-    "version": "1.10.0",
+    "version": "1.11.0",
     "localized_ui": true,
     "svg_icons": true,
     "simple_mode": true,
